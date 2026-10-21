@@ -472,13 +472,53 @@ MONGODB_TRUST_DENSITY_COLLECTION=trust_density
 
 ---
 
+## 🖥️ Layer 5: Lightweight Frontend & Admin Audit UI
+
+> **Layer 5 adds a lightweight local frontend and admin audit UI. Advanced evaluation, auth, and production hardening come later.**
+
+EvidenceBridge includes a complete, local-first web UI built with **React 18 + Vite + TypeScript + Tailwind CSS** allowing clinicians and auditors to submit claims, review verification verdicts, inspect step-by-step decision graphs, and analyze metropolitan trust density without using `curl`.
+
+### Quick Start (Frontend)
+
+```bash
+# 1. Ensure backend is running
+uvicorn app.main:app --port 8000
+
+# 2. In a separate terminal, start frontend
+cd frontend
+npm install
+npm run dev
+```
+
+Open [http://localhost:5173](http://localhost:5173) in your browser. All requests to `/api/v1/*` are automatically proxied to the FastAPI backend.
+
+### Key Views
+
+- **Audit / Extract (`/`)**: Paste any raw medical document or sample hospital bill line. Run extraction and verification in one click with instant verdict badges (`ACCEPT`, `FLAG`, `ABSTAIN`), cost anomaly flags, support score bars, and direct audit trail links.
+- **Claims Explorer (`/claims`)**: Paginated claim list with instant client-side filters for decision action (`ACCEPT`, `FLAG`, `ABSTAIN`), cost anomalies only, and geographic locality search.
+- **Claim Detail & 7-Stage Audit Graph (`/claims/:claimId`)**: Deep-dive audit view displaying verbatim original text, SHA-256 cryptographic provenance digest with copy button, structured extraction fields, clinical guideline passages with relevance scores, and an expandable 7-stage pipeline decision timeline. Includes on-demand claim re-verification.
+- **Hyperlocal Trust Density Dashboard (`/trust-density`)**: Metropolitan healthcare reliability overview. Query canonical location keys (`houston_tx`, `chicago_il`, `atlanta_ga`) to view composite density scores ($0.0 - 1.0$), trust tiers, cost anomaly rates, time-decay weighted volume, and synthesized audit recommendations. Includes on-demand locality metric recomputation.
+
+### Frontend Smoke Checklist
+
+- [ ] FastAPI backend running at `http://localhost:8000`
+- [ ] Top nav indicator displays green "Backend Online"
+- [ ] Home: Click "Try a sample hospital bill" → click "Extract & Verify Claim" → verify outcome renders
+- [ ] Claims: Navigate to `/claims` → verify claim cards load with action/verdict badges
+- [ ] Filter: Select "Flag" or check "Cost Anomalies Only" → verify claims filter immediately
+- [ ] Detail: Click any claim → verify verbatim text, SHA-256 copy button, and 7-stage audit timeline render
+- [ ] Trust Density: Navigate to `/trust-density` → click `houston_tx` → inspect metrics, score gauge, and recommendations
+
+---
+
 ## 🗺️ Roadmap & Next Layers
 
 - [x] **Layer 1:** Local Ingestion, Ollama structured extraction, tamper-evident provenance, MongoDB storage.
 - [x] **Layer 2:** Claim Verification, Support Scoring (0.0–1.0), Decision Triad (ACCEPT, FLAG, ABSTAIN), and Basic Cost Anomaly Detection against public CMS/Fair Health benchmarks.
 - [x] **Layer 3:** Rigorous 5-Rule Abstention Engine, BM25 + Vector Hybrid Retrieval Ranking, and Full 7-Stage Decision Audit Graph.
-- [x] **Layer 4 (This Layer):** Hyperlocal Trust Density — geographic claim aggregation, recency-weighted density scoring, human-auditable location insights, and `/trust-density` endpoints.
-- [ ] **Layer 5:** High-Performance Verification Engine & Interactive Web Dashboard.
+- [x] **Layer 4:** Hyperlocal Trust Density — geographic claim aggregation, recency-weighted density scoring, human-auditable location insights, and `/trust-density` endpoints.
+- [x] **Layer 5 (This Layer):** Lightweight Local Frontend & Admin Audit UI — React + Vite + TypeScript + Tailwind UI for interactive extraction, verification, 7-stage audit graph visualization, and trust density exploration.
+- [ ] **Layer 6:** High-Performance Verification Engine & Advanced Evaluation Suite.
 
 
 ---
