@@ -17,6 +17,10 @@ from app.models.schemas import (
     ExtractionRequest,
     ExtractionResponse,
     HealthResponse,
+    LocationInsight,
+    TrustDensityListResponse,
+    TrustDensityMetrics,
+    TrustDensityResponse,
     VerificationResponse,
     VerificationResult,
 )
@@ -27,6 +31,7 @@ from app.services.extraction import (
 )
 from app.services.provenance import ProvenanceService
 from app.services.storage import StorageError, storage_service
+from app.services.trust_density import trust_density_service
 from app.services.vector_store import vector_store_service
 from app.services.verification import verification_service
 from app.utils.logger import logger
@@ -165,16 +170,17 @@ async def get_claim(claim_id: str) -> Claim:
     "/claims",
     response_model=ClaimListResponse,
     summary="List stored claims",
-    description="Retrieve a paginated list of claims with provenance, sorted newest first."
+    description="Retrieve a paginated list of claims with provenance, sorted newest first, optionally filtered by geographic location key or city name."
 )
 async def list_claims(
     limit: int = Query(default=20, ge=1, le=100, description="Max claims to return"),
-    skip: int = Query(default=0, ge=0, description="Number of claims to skip")
+    skip: int = Query(default=0, ge=0, description="Number of claims to skip"),
+    location: Optional[str] = Query(default=None, description="Optional location filter (e.g. 'houston_tx', 'chicago_il', 'Atlanta')"),
 ) -> ClaimListResponse:
-    """List claims stored in EvidenceBridge."""
+    """List claims stored in EvidenceBridge, optionally filtered by location."""
     try:
-        claims = await storage_service.list_claims(limit=limit, skip=skip)
-        total = await storage_service.count_claims()
+        claims = await storage_service.list_claims(limit=limit, skip=skip, location=location)
+        total = await storage_service.count_claims(location=location)
         return ClaimListResponse(
             total=total,
             count=len(claims),
@@ -239,6 +245,16 @@ async def verify_claim_by_id(claim_id: str) -> VerificationResponse:
         await storage_service.insert_verification(verification)
     except StorageError as e:
         logger.warning(f"Could not persist verification result to MongoDB: {e}")
+
+    # 4. Recompute trust density for locality if claim has location
+    if claim.location and claim.location.normalized_key:
+        try:
+            await trust_density_service.recompute_and_save(
+                claim.location.normalized_key,
+                storage_service,
+            )
+        except Exception as e:
+            logger.warning(f"Could not recompute trust density for {claim.location.normalized_key}: {e}")
 
     return VerificationResponse(
         success=True,
@@ -319,6 +335,16 @@ async def extract_and_verify(request: ExtractionRequest) -> ExtractAndVerifyResp
             await storage_service.insert_verification(verification)
         except StorageError as e:
             logger.warning(f"Could not persist verification result: {e}")
+
+        # 6. Recompute trust density for locality if claim has location
+        if claim.location and claim.location.normalized_key:
+            try:
+                await trust_density_service.recompute_and_save(
+                    claim.location.normalized_key,
+                    storage_service,
+                )
+            except Exception as e:
+                logger.warning(f"Could not recompute trust density for {claim.location.normalized_key}: {e}")
 
     return ExtractAndVerifyResponse(
         success=True,
@@ -414,4 +440,130 @@ async def get_audit_trail_by_verification(verification_id: str) -> AuditResponse
         success=True,
         audit_trail=audit_trail,
         message="Decision audit trail retrieved successfully"
+    )
+
+
+# ==============================================================================
+# Layer 4: Hyperlocal Trust Density Endpoints
+# ==============================================================================
+
+@router.get(
+    "/trust-density/{location_key}",
+    response_model=TrustDensityResponse,
+    summary="Get hyperlocal trust density for a location",
+    description="Retrieve aggregated trust metrics, cost anomaly rate, recency-weighted activity, and synthesized audit insight for a geographic area (e.g. 'houston_tx', 'chicago_il')."
+)
+async def get_trust_density(location_key: str) -> TrustDensityResponse:
+    """Retrieve or recompute hyperlocal trust density metrics and risk insight."""
+    loc_clean = location_key.strip().lower()
+
+    # 1. Check if stored in MongoDB
+    record = await storage_service.get_trust_density(loc_clean)
+    if record and "metrics" in record:
+        metrics = TrustDensityMetrics.model_validate(record["metrics"])
+        insight = LocationInsight.model_validate(record["insight"]) if record.get("insight") else None
+        return TrustDensityResponse(
+            success=True,
+            metrics=metrics,
+            insight=insight,
+            message=f"Trust density retrieved for '{loc_clean}'"
+        )
+
+    # 2. If not stored, calculate from live claims
+    claims_data = await storage_service.get_claims_by_location(loc_clean)
+    if not claims_data:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No claims or trust density records found for location '{loc_clean}'."
+        )
+
+    claims = [Claim.model_validate(c) for c in claims_data]
+    city = claims[0].location.city if (claims[0].location and claims[0].location.city) else loc_clean
+    state_or_region = claims[0].location.state_or_region if claims[0].location else None
+
+    verifications: list[VerificationResult] = []
+    for c in claims:
+        v_data = await storage_service.get_verification_by_claim_id(c.claim_id)
+        if v_data:
+            verifications.append(VerificationResult.model_validate(v_data))
+
+    metrics, insight = trust_density_service.calculate_metrics(
+        location_key=loc_clean,
+        city=city,
+        state_or_region=state_or_region,
+        claims=claims,
+        verifications=verifications,
+    )
+
+    # Upsert in background if connected
+    if storage_service.is_connected:
+        try:
+            await storage_service.upsert_trust_density(
+                metrics_dict=metrics.model_dump(mode="json"),
+                insight_dict=insight.model_dump(mode="json"),
+            )
+        except Exception as e:
+            logger.warning(f"Could not persist on-the-fly trust density: {e}")
+
+    return TrustDensityResponse(
+        success=True,
+        metrics=metrics,
+        insight=insight,
+        message=f"Trust density dynamically calculated for '{loc_clean}'"
+    )
+
+
+@router.get(
+    "/trust-density",
+    response_model=TrustDensityListResponse,
+    summary="List all location trust densities",
+    description="Retrieve a paginated list of geographic localities ranked by trust density score or claim volume."
+)
+async def list_trust_densities(
+    limit: int = Query(default=20, ge=1, le=100, description="Max localities to return"),
+    skip: int = Query(default=0, ge=0, description="Number of records to skip"),
+    sort_by: str = Query(default="density_score", description="Sort field: 'density_score' (default) or 'volume'"),
+) -> TrustDensityListResponse:
+    """List aggregated trust densities across all tracked geographic locations."""
+    records = await storage_service.list_trust_densities(limit=limit, skip=skip, sort_by=sort_by)
+    total = await storage_service.count_trust_densities()
+
+    locations: list[TrustDensityMetrics] = []
+    for rec in records:
+        if "metrics" in rec:
+            locations.append(TrustDensityMetrics.model_validate(rec["metrics"]))
+        else:
+            try:
+                locations.append(TrustDensityMetrics.model_validate(rec))
+            except Exception:
+                pass
+
+    return TrustDensityListResponse(
+        total=total,
+        count=len(locations),
+        locations=locations,
+    )
+
+
+@router.post(
+    "/trust-density/{location_key}/recompute",
+    response_model=TrustDensityResponse,
+    summary="Force recompute trust density for a location",
+    description="Recalculates trust density metrics and risk insight from all existing claims and verifications in the specified location."
+)
+async def recompute_trust_density(location_key: str) -> TrustDensityResponse:
+    """Force recompute and persist trust density metrics for a location."""
+    loc_clean = location_key.strip().lower()
+    res = await trust_density_service.recompute_and_save(loc_clean, storage_service)
+    if not res:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Unable to recompute trust density: No claims found for location '{loc_clean}'."
+        )
+    metrics, insight = res
+    return TrustDensityResponse(
+        success=True,
+        metrics=metrics,
+        insight=insight,
+        message=f"Trust density successfully recomputed and updated for '{loc_clean}'."
     )

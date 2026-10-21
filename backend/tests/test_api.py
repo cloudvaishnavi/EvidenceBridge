@@ -16,8 +16,12 @@ from app.models.schemas import (
     EvidencePassage,
     EvidenceSnippet,
     ExtractedFields,
+    LocationInfo,
+    LocationInsight,
     ProvenanceMetadata,
     SentimentType,
+    TrustDensityMetrics,
+    TrustTier,
     VerificationAction,
     VerificationResult,
     VerificationVerdict,
@@ -389,3 +393,150 @@ def test_get_audit_by_verification_id_not_found(mock_get_audit, client):
     assert response.status_code == 404
     assert "no audit trail found" in response.json()["detail"].lower()
 
+
+# ==============================================================================
+# Layer 4: Trust Density Endpoint Tests
+# ==============================================================================
+
+@patch("app.api.routes.storage_service.get_trust_density")
+def test_get_trust_density_from_cache(mock_get_td, client):
+    """GET /trust-density/{location_key} returns cached metrics."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    cached = {
+        "location_key": "houston_tx",
+        "metrics": {
+            "location_key": "houston_tx",
+            "city": "Houston",
+            "state_or_region": "TX",
+            "total_claims": 10,
+            "verified_claims": 8,
+            "supported_count": 6,
+            "partially_supported_count": 1,
+            "contradicted_count": 1,
+            "flagged_count": 2,
+            "abstained_count": 0,
+            "cost_anomaly_count": 1,
+            "cost_anomaly_rate": 0.125,
+            "support_ratio": 0.8125,
+            "recency_weighted_volume": 8.5,
+            "density_score": 0.78,
+            "trust_tier": "high",
+            "last_updated": now.isoformat(),
+        },
+        "insight": {
+            "location_key": "houston_tx",
+            "city": "Houston",
+            "state_or_region": "TX",
+            "density_score": 0.78,
+            "trust_tier": "high",
+            "top_anomalous_entities": ["MRI"],
+            "top_procedures_audited": ["Metformin", "ER Visit"],
+            "summary_text": "HIGH TRUST in Houston, TX: score 0.78",
+            "sample_claim_ids": ["clm_1", "clm_2"],
+            "recommendation": "Expedited verification eligible.",
+        },
+    }
+    mock_get_td.return_value = cached
+
+    response = client.get("/trust-density/houston_tx")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["metrics"]["location_key"] == "houston_tx"
+    assert data["metrics"]["density_score"] == 0.78
+    assert data["metrics"]["trust_tier"] == "high"
+    assert data["insight"]["city"] == "Houston"
+
+
+@patch("app.api.routes.storage_service.get_trust_density")
+@patch("app.api.routes.storage_service.get_claims_by_location")
+def test_get_trust_density_not_found(mock_get_claims, mock_get_td, client):
+    """GET /trust-density/{location_key} returns 404 if no data exists."""
+    mock_get_td.return_value = None
+    mock_get_claims.return_value = []
+
+    response = client.get("/trust-density/nonexistent_xx")
+    assert response.status_code == 404
+    assert "no claims" in response.json()["detail"].lower() or "not found" in response.json()["detail"].lower()
+
+
+@patch("app.api.routes.storage_service.list_trust_densities")
+@patch("app.api.routes.storage_service.count_trust_densities")
+def test_list_trust_densities(mock_count, mock_list, client):
+    """GET /trust-density returns paginated list."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    mock_list.return_value = [
+        {
+            "metrics": {
+                "location_key": "houston_tx",
+                "city": "Houston",
+                "state_or_region": "TX",
+                "total_claims": 10,
+                "verified_claims": 8,
+                "supported_count": 6,
+                "partially_supported_count": 1,
+                "contradicted_count": 1,
+                "flagged_count": 2,
+                "abstained_count": 0,
+                "cost_anomaly_count": 1,
+                "cost_anomaly_rate": 0.125,
+                "support_ratio": 0.8,
+                "recency_weighted_volume": 8.0,
+                "density_score": 0.78,
+                "trust_tier": "high",
+                "last_updated": now.isoformat(),
+            }
+        }
+    ]
+    mock_count.return_value = 1
+
+    response = client.get("/trust-density")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["count"] == 1
+    assert len(data["locations"]) == 1
+    assert data["locations"][0]["location_key"] == "houston_tx"
+
+
+@patch("app.api.routes.storage_service.list_claims")
+@patch("app.api.routes.storage_service.count_claims")
+def test_list_claims_with_location_filter(mock_count, mock_list, client, sample_extracted_fields):
+    """GET /claims?location=houston_tx returns filtered claims."""
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    mock_claim = Claim(
+        claim_id="clm_houston_1",
+        original_text="Houston hospital bill",
+        source_type="hospital_bill",
+        timestamp=now,
+        extracted_fields=sample_extracted_fields,
+        confidence=0.90,
+        provenance=ProvenanceMetadata(
+            source_hash="abc123",
+            original_snippet="Houston hospital bill",
+            text_length=21,
+            source_type="hospital_bill",
+            ingested_at=now,
+        ),
+        location=LocationInfo(
+            city="Houston",
+            state_or_region="TX",
+            country="US",
+            normalized_key="houston_tx",
+        ),
+    )
+    mock_list.return_value = [mock_claim]
+    mock_count.return_value = 1
+
+    response = client.get("/claims?location=houston_tx")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total"] == 1
+    assert data["claims"][0]["claim_id"] == "clm_houston_1"
+    assert data["claims"][0]["location"]["normalized_key"] == "houston_tx"

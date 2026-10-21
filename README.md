@@ -370,24 +370,116 @@ pytest backend/tests -v
 ```
 
 Tests cover:
-- ✅ **Schemas**: Complete validation of Claim, VerificationResult, and AuditTrail models
+- ✅ **Schemas**: Complete validation of Claim, VerificationResult, AuditTrail, LocationInfo, TrustDensityMetrics models
 - ✅ **Provenance**: SHA-256 cryptographic digests & tamper detection
 - ✅ **Extraction**: Ollama structured JSON parsing & markdown stripping
 - ✅ **Cost Anomaly Detection**: Numeric extraction, CPT code matching, extreme markup multiplier ($74 Tylenol, $720 Saline)
 - ✅ **Hybrid Retrieval Quality**: BM25 + Vector ranking, entity anchoring, used vs discarded passage labeling
 - ✅ **Abstention Policy Gates**: Deterministic enforcement of all 5 safety rules (missing entity, no evidence, conflicting guidelines, low confidence, unbenchmarked high cost)
 - ✅ **Decision Audit Trail**: Full 7-stage decision graph recording and verification ID linkage
-- ✅ **FastAPI Endpoints**: `/extract`, `/verify/{id}`, `/extract-and-verify`, `/verification/{id}`, `/audit/{claim_id}`, `/audit/verification/{verif_id}`
+- ✅ **Location Extraction**: City/state regex extraction, normalization, stop-word filtering, prominent-city fallback
+- ✅ **Trust Density Math**: Support ratio (with partial credit), anomaly rate, time-decay recency weighting, tier assignment
+- ✅ **Trust Density Edge Cases**: Zero claims, single claim, all-abstained, no verifications
+- ✅ **FastAPI Endpoints**: All Layer 1–4 endpoints including `/trust-density/{key}`, `/trust-density`, `/claims?location=...`
+
+---
+
+## 🗺️ Layer 4: Hyperlocal Trust Density
+
+> **Layer 4 adds hyperlocal trust density. Frontend and advanced evaluation come later.**
+
+### What it does
+
+Every verified claim is now associated with a geographic location extracted automatically from the document text (regex + prominent-city fallback — no external geocoding API needed). EvidenceBridge aggregates verified claims by `location_key` and computes a deterministic **trust density score** that captures:
+
+| Signal | Weight (default) |
+|---|---|
+| `support_ratio` — fraction of conclusive verifications that are supported | 45% |
+| `1 − cost_anomaly_rate` — inverse of the billing-anomaly rate | 35% |
+| `volume_factor` — recency-weighted claim volume (exponential decay) | 20% |
+
+**Formula:**
+```
+density_score = 0.45 × support_ratio
+              + 0.35 × (1 − cost_anomaly_rate)
+              + 0.20 × min(1.0, recency_volume / MIN_VOLUME)
+```
+
+All three weights and `MIN_VOLUME` / `TIME_DECAY_DAYS` are configurable via `.env`.
+
+**Trust Tiers:**
+
+| Tier | Score Range | Meaning |
+|---|---|---|
+| `high` | ≥ 0.75 | High guideline compliance, few anomalies |
+| `moderate` | 0.50–0.74 | Stable but occasional anomalies |
+| `low` | 0.30–0.49 | Elevated contradictions or cost markups |
+| `critical_alert` | < 0.30 with ≥ 2 anomalies | Systematic billing fraud risk |
+| `insufficient_data` | < 2 verified claims | Not enough data to score |
+
+### New Endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| `GET` | `/trust-density/{location_key}` | Get metrics + risk insight for a locality (e.g. `houston_tx`) |
+| `GET` | `/trust-density` | Paginated list of all tracked locations, ranked by `density_score` |
+| `POST` | `/trust-density/{location_key}/recompute` | Force-recompute metrics from live MongoDB data |
+| `GET` | `/claims?location=houston_tx` | Filter claims by canonical location key or city name |
+
+### Example cURL
+
+```bash
+# Get trust density for Houston, TX
+curl http://localhost:8000/trust-density/houston_tx
+
+# List all locations ranked by density score
+curl "http://localhost:8000/trust-density?limit=10&sort_by=density_score"
+
+# Filter claims by location
+curl "http://localhost:8000/claims?location=chicago_il&limit=20"
+
+# Force recompute after seeding new data
+curl -X POST http://localhost:8000/trust-density/atlanta_ga/recompute
+```
+
+### Seed with trust density
+
+```bash
+# Ingest + verify all samples, then show per-location trust density table
+python scripts/seed_data.py --verify
+```
+
+### Location key format
+
+Canonical keys are normalized lowercase snake_case:
+- `"Atlanta, GA"` → `atlanta_ga`
+- `"Chicago, Illinois"` → `chicago_il`
+- `"Houston, TX"` → `houston_tx`
+- `"Los Angeles, CA"` → `los_angeles_ca`
+
+Location is **best-effort** — if no city/state is found in the text, `claim.location` is `null` and the core pipeline continues without interruption.
+
+### Layer 4 .env options
+
+```env
+TRUST_DENSITY_SUPPORT_WEIGHT=0.45
+TRUST_DENSITY_ANOMALY_WEIGHT=0.35
+TRUST_DENSITY_VOLUME_WEIGHT=0.20
+TRUST_DENSITY_MIN_VOLUME=5
+TRUST_DENSITY_TIME_DECAY_DAYS=45.0
+MONGODB_TRUST_DENSITY_COLLECTION=trust_density
+```
 
 ---
 
 ## 🗺️ Roadmap & Next Layers
 
 - [x] **Layer 1:** Local Ingestion, Ollama structured extraction, tamper-evident provenance, MongoDB storage.
-- [x] **Layer 2:** Claim Verification, Support Scoring ($0.0-1.0$), Decision Triad (ACCEPT, FLAG, ABSTAIN), and Basic Cost Anomaly Detection against public CMS/Fair Health benchmarks.
-- [x] **Layer 3 (This Layer):** Rigorous 5-Rule Abstention Engine, BM25 + Vector Hybrid Retrieval Ranking, and Full 7-Stage Decision Audit Graph.
-- [ ] **Layer 4:** Hyperlocal Trust Density Framework (ZIP/city-level provider density, source credibility scoring).
+- [x] **Layer 2:** Claim Verification, Support Scoring (0.0–1.0), Decision Triad (ACCEPT, FLAG, ABSTAIN), and Basic Cost Anomaly Detection against public CMS/Fair Health benchmarks.
+- [x] **Layer 3:** Rigorous 5-Rule Abstention Engine, BM25 + Vector Hybrid Retrieval Ranking, and Full 7-Stage Decision Audit Graph.
+- [x] **Layer 4 (This Layer):** Hyperlocal Trust Density — geographic claim aggregation, recency-weighted density scoring, human-auditable location insights, and `/trust-density` endpoints.
 - [ ] **Layer 5:** High-Performance Verification Engine & Interactive Web Dashboard.
+
 
 ---
 

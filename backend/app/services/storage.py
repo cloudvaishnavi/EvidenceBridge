@@ -4,6 +4,7 @@ Manages asynchronous MongoDB operations for storing, retrieving,
 and querying claims and their associated provenance.
 """
 
+import re
 from typing import Any, Optional
 from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, AsyncIOMotorDatabase
 from pymongo.errors import ConnectionFailure, DuplicateKeyError, ServerSelectionTimeoutError
@@ -28,6 +29,7 @@ class StorageService:
         self._collection: Optional[AsyncIOMotorCollection] = None
         self._verifications_collection: Optional[AsyncIOMotorCollection] = None
         self._audit_trails_collection: Optional[AsyncIOMotorCollection] = None
+        self._trust_density_collection: Optional[AsyncIOMotorCollection] = None
 
     async def connect(self) -> None:
         """Initialize connection pool to MongoDB and ensure indexes."""
@@ -41,6 +43,7 @@ class StorageService:
         self._collection = self._db[self.settings.MONGODB_CLAIMS_COLLECTION]
         self._verifications_collection = self._db[self.settings.MONGODB_VERIFICATIONS_COLLECTION]
         self._audit_trails_collection = self._db[self.settings.MONGODB_AUDIT_TRAILS_COLLECTION]
+        self._trust_density_collection = self._db[self.settings.MONGODB_TRUST_DENSITY_COLLECTION]
 
         try:
             # Ping database to verify connection
@@ -59,6 +62,7 @@ class StorageService:
             self._collection = None
             self._verifications_collection = None
             self._audit_trails_collection = None
+            self._trust_density_collection = None
             logger.info("MongoDB connection closed")
 
     async def _ensure_indexes(self) -> None:
@@ -69,6 +73,7 @@ class StorageService:
                 await self._collection.create_index("timestamp")
                 await self._collection.create_index("provenance.source_hash")
                 await self._collection.create_index("extracted_fields.entity")
+                await self._collection.create_index("location.normalized_key")
                 logger.info("MongoDB indexes verified on collection 'claims'")
             except Exception as e:
                 logger.warning(f"Failed to ensure MongoDB indexes on claims: {e}")
@@ -94,6 +99,15 @@ class StorageService:
             except Exception as e:
                 logger.warning(f"Failed to ensure MongoDB indexes on audit_trails: {e}")
 
+        if self._trust_density_collection is not None:
+            try:
+                await self._trust_density_collection.create_index("location_key", unique=True)
+                await self._trust_density_collection.create_index("density_score")
+                await self._trust_density_collection.create_index("trust_tier")
+                logger.info("MongoDB indexes verified on collection 'trust_density'")
+            except Exception as e:
+                logger.warning(f"Failed to ensure MongoDB indexes on trust_density: {e}")
+
     async def check_health(self) -> dict[str, Any]:
         """Check MongoDB connection and return status."""
         if self._client is None:
@@ -103,6 +117,7 @@ class StorageService:
             claims_cnt = await self.count_claims()
             verifications_cnt = await self.count_verifications()
             audit_cnt = await self.count_audit_trails()
+            trust_cnt = await self.count_trust_densities()
             return {
                 "status": "healthy",
                 "database": self.settings.MONGODB_DB_NAME,
@@ -110,9 +125,15 @@ class StorageService:
                 "claims_count": claims_cnt,
                 "verifications_count": verifications_cnt,
                 "audit_trails_count": audit_cnt,
+                "trust_density_count": trust_cnt,
             }
         except Exception as e:
             return {"status": "unreachable", "error": str(e)}
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if storage client is initialized."""
+        return self._client is not None and self._db is not None
 
     @property
     def collection(self) -> AsyncIOMotorCollection:
@@ -134,6 +155,13 @@ class StorageService:
         if self._audit_trails_collection is None:
             raise StorageError("StorageService is not connected. Call connect() first.")
         return self._audit_trails_collection
+
+    @property
+    def trust_density_collection(self) -> AsyncIOMotorCollection:
+        """Access the trust density collection."""
+        if self._trust_density_collection is None:
+            raise StorageError("StorageService is not connected. Call connect() first.")
+        return self._trust_density_collection
 
     async def insert_claim(self, claim: Claim) -> Claim:
         """
@@ -163,11 +191,26 @@ class StorageService:
             logger.error(f"Failed to retrieve claim {claim_id}: {e}")
             raise StorageError(f"Database query failed: {e}") from e
 
-    async def list_claims(self, limit: int = 50, skip: int = 0) -> list[Claim]:
-        """Retrieve a paginated list of claims sorted newest first."""
+    async def list_claims(
+        self,
+        limit: int = 50,
+        skip: int = 0,
+        location: Optional[str] = None,
+    ) -> list[Claim]:
+        """Retrieve a paginated list of claims sorted newest first, optionally filtered by location."""
         try:
+            query: dict[str, Any] = {}
+            if location:
+                loc_clean = location.strip().lower()
+                query = {
+                    "$or": [
+                        {"location.normalized_key": loc_clean},
+                        {"location.city": {"$regex": f"^{re.escape(location.strip())}$", "$options": "i"}},
+                    ]
+                }
+
             cursor = (
-                self.collection.find({}, {"_id": 0})
+                self.collection.find(query, {"_id": 0})
                 .sort("timestamp", -1)
                 .skip(skip)
                 .limit(limit)
@@ -180,10 +223,19 @@ class StorageService:
             logger.error(f"Failed to list claims: {e}")
             raise StorageError(f"Database query failed: {e}") from e
 
-    async def count_claims(self) -> int:
-        """Return total number of claims in collection."""
+    async def count_claims(self, location: Optional[str] = None) -> int:
+        """Return total number of claims in collection, optionally filtered by location."""
         try:
-            return await self.collection.count_documents({})
+            query: dict[str, Any] = {}
+            if location:
+                loc_clean = location.strip().lower()
+                query = {
+                    "$or": [
+                        {"location.normalized_key": loc_clean},
+                        {"location.city": {"$regex": f"^{re.escape(location.strip())}$", "$options": "i"}},
+                    ]
+                }
+            return await self.collection.count_documents(query)
         except Exception as e:
             logger.warning(f"Failed to count claims: {e}")
             return 0
@@ -272,6 +324,107 @@ class StorageService:
             return await self.audit_trails_collection.count_documents({})
         except Exception as e:
             logger.warning(f"Failed to count audit trails: {e}")
+            return 0
+
+    # --------------------------------------------------------------------------
+    # Layer 4: Trust Density & Location Methods
+    # --------------------------------------------------------------------------
+
+    async def get_claims_by_location(self, location_key: str) -> list[dict[str, Any]]:
+        """Retrieve all claim documents matching a normalized location key or city name."""
+        try:
+            loc_clean = location_key.strip().lower()
+            query = {
+                "$or": [
+                    {"location.normalized_key": loc_clean},
+                    {"location.city": {"$regex": f"^{re.escape(location_key.strip())}$", "$options": "i"}},
+                ]
+            }
+            cursor = self.collection.find(query, {"_id": 0}).sort("timestamp", -1)
+            claims: list[dict[str, Any]] = []
+            async for doc in cursor:
+                claims.append(doc)
+            return claims
+        except Exception as e:
+            logger.error(f"Failed to retrieve claims for location {location_key}: {e}")
+            return []
+
+    async def get_verification_by_claim_id(self, claim_id: str) -> Optional[dict[str, Any]]:
+        """Retrieve raw verification document for a claim."""
+        try:
+            return await self.verifications_collection.find_one({"claim_id": claim_id}, {"_id": 0})
+        except Exception as e:
+            logger.error(f"Failed to retrieve verification for claim {claim_id}: {e}")
+            return None
+
+    async def upsert_trust_density(
+        self,
+        metrics_dict: dict[str, Any],
+        insight_dict: Optional[dict[str, Any]] = None,
+    ) -> None:
+        """Persist or update aggregated trust density metrics and insight for a locality."""
+        try:
+            loc_key = metrics_dict["location_key"].lower()
+            doc = {
+                "location_key": loc_key,
+                "city": metrics_dict.get("city", loc_key),
+                "state_or_region": metrics_dict.get("state_or_region"),
+                "metrics": metrics_dict,
+                "insight": insight_dict,
+                "density_score": metrics_dict.get("density_score", 0.5),
+                "trust_tier": metrics_dict.get("trust_tier"),
+                "total_claims": metrics_dict.get("total_claims", 0),
+                "verified_claims": metrics_dict.get("verified_claims", 0),
+                "last_updated": metrics_dict.get("last_updated"),
+            }
+            await self.trust_density_collection.update_one(
+                {"location_key": loc_key},
+                {"$set": doc},
+                upsert=True,
+            )
+            logger.info(f"Upserted trust density for location '{loc_key}' (score={metrics_dict.get('density_score')})")
+        except Exception as e:
+            logger.error(f"Failed to upsert trust density for {metrics_dict.get('location_key')}: {e}")
+            raise StorageError(f"Trust density upsert failed: {e}") from e
+
+    async def get_trust_density(self, location_key: str) -> Optional[dict[str, Any]]:
+        """Retrieve aggregated trust density record by location key."""
+        try:
+            loc_clean = location_key.strip().lower()
+            return await self.trust_density_collection.find_one({"location_key": loc_clean}, {"_id": 0})
+        except Exception as e:
+            logger.error(f"Failed to retrieve trust density for {location_key}: {e}")
+            return None
+
+    async def list_trust_densities(
+        self,
+        limit: int = 50,
+        skip: int = 0,
+        sort_by: str = "density_score",
+    ) -> list[dict[str, Any]]:
+        """Retrieve list of trust density records, sorted by density_score or total_claims."""
+        try:
+            sort_field = "total_claims" if sort_by == "volume" else "density_score"
+            cursor = (
+                self.trust_density_collection.find({}, {"_id": 0})
+                .sort(sort_field, -1)
+                .skip(skip)
+                .limit(limit)
+            )
+            records: list[dict[str, Any]] = []
+            async for doc in cursor:
+                records.append(doc)
+            return records
+        except Exception as e:
+            logger.error(f"Failed to list trust density records: {e}")
+            return []
+
+    async def count_trust_densities(self) -> int:
+        """Return total number of trust density location records."""
+        try:
+            return await self.trust_density_collection.count_documents({})
+        except Exception as e:
+            logger.warning(f"Failed to count trust densities: {e}")
             return 0
 
 

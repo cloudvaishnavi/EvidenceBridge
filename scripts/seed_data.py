@@ -1,7 +1,8 @@
 """
-Seed Data Script for EvidenceBridge (Layer 2).
+Seed Data Script for EvidenceBridge (Layer 4).
 Ingests and verifies sample clinical notes, hospital bills, and patient forum reports
 against local knowledge base guidelines and price benchmarks.
+After seeding, displays per-location trust density summary table.
 
 Usage:
     python scripts/seed_data.py [--url http://localhost:8000] [--file data/samples/samples.json] [--verify]
@@ -66,6 +67,7 @@ async def ingest_via_api(api_base_url: str, samples: list[dict[str, Any]], verif
 
     success_count = 0
     fail_count = 0
+    seeded_locations: set[str] = set()
 
     async with httpx.AsyncClient(timeout=120.0) as client:
         for idx, item in enumerate(samples, start=1):
@@ -88,14 +90,18 @@ async def ingest_via_api(api_base_url: str, samples: list[dict[str, Any]], verif
                     data = resp.json()
                     claim = data.get("claim", {})
                     fields = claim.get("extracted_fields", {})
-                    prov = claim.get("provenance", {})
 
-                    print(f"    [✓] Claim ID:    {claim.get('claim_id')}")
-                    print(f"        • Entity:     {fields.get('entity')}")
-                    print(f"        • Outcome:    {fields.get('effect_or_outcome')}")
-                    print(f"        • Cost:       {fields.get('cost_range') or 'None'}")
-                    print(f"        • Sentiment:  {fields.get('sentiment')}")
-                    print(f"        • Confidence: {claim.get('confidence')}")
+                    print(f"    [OK] Claim ID:    {claim.get('claim_id')}")
+                    print(f"         Entity:      {fields.get('entity')}")
+                    print(f"         Cost:        {fields.get('cost_range') or 'None'}")
+
+                    # Track locations for trust density recompute
+                    loc = claim.get("location") or {}
+                    loc_key = loc.get("normalized_key")
+                    if loc_key:
+                        seeded_locations.add(loc_key)
+                        loc_display = f"{loc.get('city')}, {loc.get('state_or_region')}" if loc.get("state_or_region") else loc.get("city", loc_key)
+                        print(f"         Location:    {loc_display} [{loc_key}]")
 
                     if verify and "verification" in data:
                         verif = data["verification"]
@@ -106,32 +112,58 @@ async def ingest_via_api(api_base_url: str, samples: list[dict[str, Any]], verif
                         anomaly = verif.get("anomaly_details") or {}
 
                         action_badge = {
-                            "accept": "[ACCEPT - VERIFIED]",
-                            "flag": "[FLAG - SUSPICIOUS/CONTRADICTED]",
-                            "abstain": "[ABSTAIN - INSUFFICIENT EVIDENCE]"
+                            "accept": "[ACCEPT]",
+                            "flag": "[FLAG]",
+                            "abstain": "[ABSTAIN]"
                         }.get(action, f"[{action.upper()}]")
 
-                        print(f"        --------------------------------------------------------")
-                        print(f"        • Action:     {action_badge}")
-                        print(f"        • Verdict:    {verdict} (support score: {score})")
-                        print(f"        • Cost Flag:  {'⚠️ ANOMALY DETECTED' if is_anomaly else '✓ Normal / Unflagged'}")
+                        print(f"         ------------------------------------------------")
+                        print(f"         Action:      {action_badge}")
+                        print(f"         Verdict:     {verdict} (score: {score})")
+                        print(f"         Cost Flag:   {'ANOMALY' if is_anomaly else 'OK'}")
                         if is_anomaly:
-                            print(f"          Severity:   {anomaly.get('severity', '').upper()} ({anomaly.get('multiplier')}× max benchmark)")
-                            print(f"          Detail:     {anomaly.get('explanation')}")
+                            print(f"         Severity:    {anomaly.get('severity', '').upper()} ({anomaly.get('multiplier')}x benchmark)")
                         if verif.get("abstain_reason"):
-                            print(f"          Abstain:    {verif.get('abstain_reason')}")
-                        print(f"        • Audit:      {verif.get('reasoning')}")
+                            print(f"         Abstain:     {verif.get('abstain_reason')[:80]}")
 
                     success_count += 1
                 else:
-                    print(f"    [✗] HTTP {resp.status_code}: {resp.text}")
+                    print(f"    [FAIL] HTTP {resp.status_code}: {resp.text[:120]}")
                     fail_count += 1
             except Exception as e:
-                print(f"    [✗] Request failed: {e}")
+                print(f"    [FAIL] Request failed: {e}")
                 fail_count += 1
 
     print("\n" + "=" * 80)
     print(f" Processing Complete: {success_count} succeeded, {fail_count} failed.")
+    print("=" * 80)
+
+    # -- Layer 4: Recompute & display Trust Density for seeded locations --
+    if seeded_locations and verify:
+        print(f"\n[Layer 4] Recomputing trust density for {len(seeded_locations)} location(s)...")
+        print("-" * 80)
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            for loc_key in sorted(seeded_locations):
+                try:
+                    r = await client.post(f"{base}/trust-density/{loc_key}/recompute")
+                    if r.status_code == 200:
+                        td = r.json()
+                        m = td.get("metrics", {})
+                        insight = td.get("insight", {})
+                        tier = m.get("trust_tier", "?").upper()
+                        score = m.get("density_score", 0.0)
+                        total = m.get("total_claims", 0)
+                        anomaly_rate = m.get("cost_anomaly_rate", 0.0)
+                        print(f"  {loc_key:<20} | Tier: {tier:<18} | Score: {score:.3f} | Claims: {total} | Anomaly Rate: {anomaly_rate:.1%}")
+                        if insight and insight.get("summary_text"):
+                            print(f"    Insight: {insight['summary_text'][:100]}")
+                    elif r.status_code == 404:
+                        print(f"  {loc_key:<20} | No claims with verifications yet (run with --verify flag)")
+                    else:
+                        print(f"  {loc_key:<20} | Error: HTTP {r.status_code}")
+                except Exception as e:
+                    print(f"  {loc_key:<20} | Recompute error: {e}")
+        print("-" * 80)
     print("=" * 80)
 
 

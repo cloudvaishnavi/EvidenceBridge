@@ -95,6 +95,19 @@ class ProvenanceMetadata(BaseModel):
     )
 
 
+class LocationInfo(BaseModel):
+    """Normalized geographic location associated with a healthcare claim."""
+    model_config = ConfigDict(extra="ignore")
+
+    city: str = Field(..., description="City or municipality (e.g. 'Chicago', 'Atlanta')")
+    state_or_region: Optional[str] = Field(None, description="State, province, or region code (e.g. 'IL', 'GA', 'TX')")
+    country: str = Field(default="US", description="ISO country code")
+    normalized_key: str = Field(..., description="Normalized canonical identifier (e.g. 'chicago_il', 'atlanta_ga')")
+    raw_mention: Optional[str] = Field(None, description="Original verbatim location mention in text")
+    latitude: Optional[float] = None
+    longitude: Optional[float] = None
+
+
 class Claim(BaseModel):
     """
     Core Claim entity in EvidenceBridge.
@@ -135,6 +148,10 @@ class Claim(BaseModel):
     provenance: ProvenanceMetadata = Field(
         ...,
         description="Strict source provenance metadata"
+    )
+    location: Optional[LocationInfo] = Field(
+        default=None,
+        description="Geographic location resolved from text or source metadata"
     )
     indexed_vector: bool = Field(
         default=False,
@@ -319,6 +336,10 @@ class VerificationResult(BaseModel):
     passages_considered: list[EvidencePassage] = Field(default_factory=list)
     cost_anomaly_flag: bool = False
     anomaly_details: Optional[CostAnomalyDetails] = None
+    location: Optional[LocationInfo] = Field(
+        default=None,
+        description="Geographic location of the audited claim"
+    )
     abstain_reason: Optional[str] = None
     verified_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
@@ -370,3 +391,79 @@ class AuditResponse(BaseModel):
     success: bool = True
     audit_trail: AuditTrail
     message: str = "Audit trail retrieved successfully"
+
+
+# ==============================================================================
+# Layer 4: Hyperlocal Trust Density Schemas
+# ==============================================================================
+
+class TrustTier(str, Enum):
+    """Categorical trust tier assigned to a geographic location."""
+    HIGH = "high"                      # Clean guidelines, very few anomalies, high support
+    MODERATE = "moderate"              # Mixed reports, minor or occasional anomalies
+    LOW = "low"                        # Elevated cost anomaly density or frequent contradictions
+    CRITICAL_ALERT = "critical_alert"  # Extreme cost markups (>5x) or systematic contradictions
+    INSUFFICIENT_DATA = "insufficient_data"  # Fewer than minimum required claims to formulate score
+
+
+class TrustDensityMetrics(BaseModel):
+    """
+    Aggregated location-level trust and anomaly density metrics.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    location_key: str = Field(..., description="Canonical key, e.g. 'chicago_il'")
+    city: str
+    state_or_region: Optional[str] = None
+    total_claims: int = Field(default=0, description="Total ingested claims in this locality")
+    verified_claims: int = Field(default=0, description="Claims that have undergone verification")
+    supported_count: int = 0
+    partially_supported_count: int = 0
+    contradicted_count: int = 0
+    flagged_count: int = 0
+    abstained_count: int = 0
+    cost_anomaly_count: int = 0
+    cost_anomaly_rate: float = Field(default=0.0, ge=0.0, le=1.0)
+    support_ratio: float = Field(default=0.0, ge=0.0, le=1.0)
+    recency_weighted_volume: float = 0.0
+    density_score: float = Field(
+        default=0.5,
+        ge=0.0,
+        le=1.0,
+        description="Composite trust density score (0.0 to 1.0) where 1.0 is peak clinical & billing reliability"
+    )
+    trust_tier: TrustTier = Field(default=TrustTier.INSUFFICIENT_DATA)
+    last_updated: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class LocationInsight(BaseModel):
+    """
+    Synthesized audit insight and risk summary for a geographic locality.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    location_key: str
+    city: str
+    state_or_region: Optional[str] = None
+    density_score: float
+    trust_tier: TrustTier
+    top_anomalous_entities: list[str] = Field(default_factory=list)
+    top_procedures_audited: list[str] = Field(default_factory=list)
+    summary_text: str
+    sample_claim_ids: list[str] = Field(default_factory=list)
+    recommendation: Optional[str] = None
+
+
+class TrustDensityResponse(BaseModel):
+    """Response payload for a single location trust density query."""
+    success: bool = True
+    metrics: TrustDensityMetrics
+    insight: Optional[LocationInsight] = None
+    message: str = "Trust density metrics retrieved successfully"
+
+
+class TrustDensityListResponse(BaseModel):
+    """Paginated list of location trust density records."""
+    total: int
+    count: int
+    locations: list[TrustDensityMetrics]

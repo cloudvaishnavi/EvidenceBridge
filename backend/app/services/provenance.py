@@ -13,9 +13,11 @@ import uuid
 from app.models.schemas import (
     Claim,
     ExtractedFields,
+    LocationInfo,
     ProvenanceMetadata,
     SourceType,
 )
+from app.services.location import location_service
 from app.utils.logger import logger
 
 
@@ -74,10 +76,11 @@ class ProvenanceService:
         source_url: Optional[str] = None,
         source_timestamp: Optional[datetime] = None,
         claim_id: Optional[str] = None,
+        location: Optional[LocationInfo] = None,
     ) -> Claim:
         """
         Assemble a fully traceable Claim combining extracted fields,
-        confidence, and tamper-evident provenance.
+        confidence, tamper-evident provenance, and geographic location.
         """
         cid = claim_id or cls.generate_claim_id()
         provenance = cls.create_provenance(
@@ -89,6 +92,14 @@ class ProvenanceService:
 
         effective_timestamp = source_timestamp or provenance.ingested_at
 
+        # Resolve location from explicit argument or automatically extract from text/fields
+        resolved_location = location
+        if resolved_location is None:
+            resolved_location = location_service.extract_location(
+                text=original_text,
+                location_field=extracted_fields.location_city,
+            )
+
         claim = Claim(
             claim_id=cid,
             original_text=original_text,
@@ -98,6 +109,7 @@ class ProvenanceService:
             extracted_fields=extracted_fields,
             confidence=round(confidence, 4),
             provenance=provenance,
+            location=resolved_location,
             indexed_vector=False,
         )
 

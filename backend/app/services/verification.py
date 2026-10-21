@@ -344,6 +344,7 @@ class VerificationService:
                 passages_considered=passages,
                 cost_anomaly_flag=has_cost_anomaly,
                 anomaly_details=anomaly_details,
+                location=claim.location,
                 abstain_reason=pre_abstention.reason,
                 verified_at=datetime.now(timezone.utc)
             )
@@ -439,6 +440,7 @@ class VerificationService:
             passages_considered=passages,
             cost_anomaly_flag=has_cost_anomaly,
             anomaly_details=anomaly_details,
+            location=claim.location,
             abstain_reason=abstain_reason,
             verified_at=datetime.now(timezone.utc)
         )

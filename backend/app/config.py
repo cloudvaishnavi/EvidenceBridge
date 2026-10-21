@@ -27,6 +27,7 @@ class Settings(BaseSettings):
     MONGODB_CLAIMS_COLLECTION: str = "claims"
     MONGODB_VERIFICATIONS_COLLECTION: str = "verifications"
     MONGODB_AUDIT_TRAILS_COLLECTION: str = "audit_trails"
+    MONGODB_TRUST_DENSITY_COLLECTION: str = "trust_density"
     MONGODB_TIMEOUT_MS: int = 4000
 
     # Ollama Local LLM Configuration
@@ -40,6 +41,13 @@ class Settings(BaseSettings):
     RETRIEVAL_RELEVANCE_THRESHOLD: float = 0.35
     MIN_CONFIDENCE_THRESHOLD: float = 0.40
     ABSTAIN_ON_UNBENCHMARKED_HIGH_COST: bool = True
+
+    # Hyperlocal Trust Density Configuration
+    TRUST_DENSITY_SUPPORT_WEIGHT: float = 0.45
+    TRUST_DENSITY_ANOMALY_WEIGHT: float = 0.35
+    TRUST_DENSITY_VOLUME_WEIGHT: float = 0.20
+    TRUST_DENSITY_MIN_VOLUME: int = 5
+    TRUST_DENSITY_TIME_DECAY_DAYS: float = 45.0
 
     # Vector Store Configuration
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"

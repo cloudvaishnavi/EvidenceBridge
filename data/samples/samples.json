@@ -76,5 +76,29 @@
     "source_type": "forum_post",
     "source_url": "https://alternative-health-discussions.org/cure-thread/44812",
     "text": "Alternative Health Forum: Has anyone tried rare Himalayan Blue Root Tincture 500mg? My naturopath in Sedona, AZ recommended 30 drops twice daily. After 3 weeks my severe macular degeneration and chronic tinnitus completely disappeared without any laser surgery. Self-pay cost was $450 for a 2 oz bottle."
+  },
+  {
+    "id": "sample_14",
+    "source_type": "hospital_bill",
+    "source_url": "hospital://grady-health-atlanta/billing/inv-2026-99283",
+    "text": "GRADY HEALTH SYSTEM - ATLANTA, GA. Emergency Department Service Level 3 (CPT 99283): Moderate severity evaluation for acute sprain. Total itemized charge: $1,150.00. Guideline compliant outpatient care."
+  },
+  {
+    "id": "sample_15",
+    "source_type": "clinical_note",
+    "source_url": "ehr://northwestern-medicine-chicago/charts/pt-88219",
+    "text": "NORTHWESTERN MEDICINE - CHICAGO, IL. Department of Orthopedic Surgery. Patient underwent diagnostic Knee Arthroscopy (CPT 29870) for persistent meniscus tear. Procedure completed without complication. Billed surgical facility charge: $4,200.00."
+  },
+  {
+    "id": "sample_16",
+    "source_type": "hospital_bill",
+    "source_url": "hospital://houston-methodist/billing/img-2026-70551",
+    "text": "HOUSTON METHODIST HOSPITAL - HOUSTON, TX. Diagnostic Radiology Service CPT 70551: Magnetic Resonance Imaging (MRI) Brain without contrast. Inpatient technical fee: $1,100.00. Within fair market benchmark for Texas Medical Center."
+  },
+  {
+    "id": "sample_17",
+    "source_type": "clinical_note",
+    "source_url": "ehr://texas-heart-institute-houston/pt-cardio-9102",
+    "text": "TEXAS HEART INSTITUTE - HOUSTON, TX. Cardiology clinic follow-up. Patient maintained on Metformin 500mg twice daily with HbA1c stable at 6.8%. Routine metabolic panel reviewed. Pharmacy copay billed: $25.00."
   }
 ]
