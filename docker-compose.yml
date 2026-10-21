@@ -1,0 +1,50 @@
+version: '3.8'
+
+services:
+  mongodb:
+    image: mongo:7.0
+    container_name: evidencebridge-mongo
+    restart: unless-stopped
+    ports:
+      - "27017:27017"
+    volumes:
+      - mongo_data:/data/db
+    healthcheck:
+      test: ["CMD", "mongosh", "--eval", "db.adminCommand('ping')"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: evidencebridge-backend
+    restart: unless-stopped
+    ports:
+      - "8000:8000"
+    environment:
+      - APP_NAME=EvidenceBridge
+      - APP_ENV=production
+      - HOST=0.0.0.0
+      - PORT=8000
+      - MONGODB_URL=mongodb://mongodb:27017
+      - MONGODB_DB_NAME=evidencebridge
+      - MONGODB_CLAIMS_COLLECTION=claims
+      # Connects to Ollama on the host machine
+      - OLLAMA_BASE_URL=http://host.docker.internal:11434
+      - OLLAMA_MODEL=phi3:mini
+      - CHROMA_PERSIST_DIRECTORY=/app/chroma_db
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - chroma_data:/app/chroma_db
+    depends_on:
+      mongodb:
+        condition: service_healthy
+
+volumes:
+  mongo_data:
+    driver: local
+  chroma_data:
+    driver: local

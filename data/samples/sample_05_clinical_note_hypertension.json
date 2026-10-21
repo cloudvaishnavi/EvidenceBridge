@@ -1,0 +1,6 @@
+{
+  "id": "sample_05",
+  "source_type": "clinical_note",
+  "source_url": "ehr://boston-cardio-associates/records/enc-7721",
+  "text": "CARDIOLOGY CLINIC NOTE: 64-year-old female with essential Stage 2 hypertension. Initiated Lisinopril 20 mg once daily alongside lifestyle sodium restriction. At 6-week follow-up in Boston, MA, seated blood pressure improved from 158/96 mmHg to 124/78 mmHg. Serum potassium and creatinine remain within normal limits. Patient reports no cough or lightheadedness."
+}

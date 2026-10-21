@@ -1,0 +1,6 @@
+{
+  "id": "sample_06",
+  "source_type": "hospital_bill",
+  "source_url": "hospital://metro-imaging-chicago/billing/claim-cpt73721",
+  "text": "METROPOLITAN IMAGING CENTER - CHICAGO, IL. Itemized Bill CPT 73721: Magnetic Resonance Imaging (MRI) Left Knee Joint without contrast material. Professional Component: $850.00. Technical/Facility Component: $3,650.00. Total Billed Charge: $4,500.00. Average local in-network benchmark for CPT 73721 is $650 - $950."
+}

@@ -1,0 +1,6 @@
+{
+  "id": "sample_02",
+  "source_type": "hospital_bill",
+  "source_url": "hospital://memorial-regional-atlanta/billing/inv-2026-99285",
+  "text": "MEMORIAL REGIONAL MEDICAL CENTER - ATLANTA, GA. ITEM NUMBER: 99285-ER-ACUTE. Description: Emergency Department Visit, Level 5 Comprehensive Evaluation & Management (Severity: High/Immediate Threat). Billed Charge: $4,850.00. Facility Fee: $1,975.00. Total Patient Responsibility: $6,825.00."
+}

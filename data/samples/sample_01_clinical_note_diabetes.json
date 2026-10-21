@@ -1,0 +1,6 @@
+{
+  "id": "sample_01",
+  "source_type": "clinical_note",
+  "source_url": "ehr://emr-archive-internal/notes/2026-03-12/pt-88419",
+  "text": "PATIENT PROGRESS NOTE: 58-year-old male with poorly controlled Type 2 Diabetes Mellitus. Started on Metformin 1,000 mg twice daily with evening meals 3 months ago. Repeat laboratory evaluation demonstrates a reduction in HbA1c from 8.9% down to 7.1%. Patient tolerates therapy well with no hypoglycemic events or gastrointestinal distress reported. Continue current dosage."
+}

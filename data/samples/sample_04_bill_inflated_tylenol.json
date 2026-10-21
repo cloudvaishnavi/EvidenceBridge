@@ -1,0 +1,6 @@
+{
+  "id": "sample_04",
+  "source_type": "hospital_bill",
+  "source_url": "hospital://st-catherine-miami/itemized/2026-04-19/rx-0250",
+  "text": "ST. CATHERINE COMMUNITY HOSPITAL - MIAMI, FL. Inpatient Pharmacy Line Item: ACETAMINOPHEN 500 MG ORAL TABLET. Quantity Dispensed: 2 tablets. Revenue Code: 0250 (Pharmacy - General). Billed Amount: $148.00 ($74.00 per single tablet). Insurance Status: Unbundled Inpatient Ancillary."
+}

@@ -1,0 +1,62 @@
+[
+  {
+    "id": "sample_01",
+    "source_type": "clinical_note",
+    "source_url": "ehr://emr-archive-internal/notes/2026-03-12/pt-88419",
+    "text": "PATIENT PROGRESS NOTE: 58-year-old male with poorly controlled Type 2 Diabetes Mellitus. Started on Metformin 1,000 mg twice daily with evening meals 3 months ago. Repeat laboratory evaluation demonstrates a reduction in HbA1c from 8.9% down to 7.1%. Patient tolerates therapy well with no hypoglycemic events or gastrointestinal distress reported. Continue current dosage."
+  },
+  {
+    "id": "sample_02",
+    "source_type": "hospital_bill",
+    "source_url": "hospital://memorial-regional-atlanta/billing/inv-2026-99285",
+    "text": "MEMORIAL REGIONAL MEDICAL CENTER - ATLANTA, GA. ITEM NUMBER: 99285-ER-ACUTE. Description: Emergency Department Visit, Level 5 Comprehensive Evaluation & Management (Severity: High/Immediate Threat). Billed Charge: $4,850.00. Facility Fee: $1,975.00. Total Patient Responsibility: $6,825.00."
+  },
+  {
+    "id": "sample_03",
+    "source_type": "patient_report",
+    "source_url": "https://reddit.com/r/OzempicForWeight/comments/k8x91",
+    "text": "Posted on r/OzempicForWeight: I've been on Semaglutide 0.5mg weekly injections for 8 weeks in Dallas, TX. Down 14 lbs and my fasting blood sugars are consistently in the 90s, but the nausea and acid reflux for the first 48 hours after each injection are brutal. My commercial insurance denied prior auth, so I'm paying $980 out of pocket per month at the pharmacy."
+  },
+  {
+    "id": "sample_04",
+    "source_type": "hospital_bill",
+    "source_url": "hospital://st-catherine-miami/itemized/2026-04-19/rx-0250",
+    "text": "ST. CATHERINE COMMUNITY HOSPITAL - MIAMI, FL. Inpatient Pharmacy Line Item: ACETAMINOPHEN 500 MG ORAL TABLET. Quantity Dispensed: 2 tablets. Revenue Code: 0250 (Pharmacy - General). Billed Amount: $148.00 ($74.00 per single tablet). Insurance Status: Unbundled Inpatient Ancillary."
+  },
+  {
+    "id": "sample_05",
+    "source_type": "clinical_note",
+    "source_url": "ehr://boston-cardio-associates/records/enc-7721",
+    "text": "CARDIOLOGY CLINIC NOTE: 64-year-old female with essential Stage 2 hypertension. Initiated Lisinopril 20 mg once daily alongside lifestyle sodium restriction. At 6-week follow-up in Boston, MA, seated blood pressure improved from 158/96 mmHg to 124/78 mmHg. Serum potassium and creatinine remain within normal limits. Patient reports no cough or lightheadedness."
+  },
+  {
+    "id": "sample_06",
+    "source_type": "hospital_bill",
+    "source_url": "hospital://metro-imaging-chicago/billing/claim-cpt73721",
+    "text": "METROPOLITAN IMAGING CENTER - CHICAGO, IL. Itemized Bill CPT 73721: Magnetic Resonance Imaging (MRI) Left Knee Joint without contrast material. Professional Component: $850.00. Technical/Facility Component: $3,650.00. Total Billed Charge: $4,500.00. Average local in-network benchmark for CPT 73721 is $650 - $950."
+  },
+  {
+    "id": "sample_07",
+    "source_type": "patient_report",
+    "source_url": "https://healthboards.com/ortho/thread/992144",
+    "text": "Forum: HealthBoards Orthopedics. Had outpatient Left Knee Arthroscopy for a torn medial meniscus at Valley Surgical Center in Phoenix, AZ. Surgery was completely successful and I walked without crutches by day 10. However, got hit with a surprise out-of-network assistant surgeon bill for $5,400 that was never disclosed pre-op."
+  },
+  {
+    "id": "sample_08",
+    "source_type": "clinical_note",
+    "source_url": "ehr://st-mary-hospital/discharge-summaries/2026-02-18/dc-118",
+    "text": "HOSPITAL DISCHARGE SUMMARY: 45-year-old female admitted for Community-Acquired Right Lower Lobe Pneumonia. Administered intravenous Ceftriaxone 1g daily for 5 days. Complete resolution of high fever, productive cough, and leukocytosis. Discharged on oral Cefdinir 300mg BID for 5 additional days in stable condition."
+  },
+  {
+    "id": "sample_09",
+    "source_type": "hospital_bill",
+    "source_url": "hospital://northwest-labs-seattle/statement/lab-80053",
+    "text": "NORTHWEST CLINICAL LABS - SEATTLE, WA. Statement of Services. CPT 80053: Comprehensive Metabolic Panel (14 clinical tests including electrolytes, glucose, BUN, liver enzymes). Billed Charge: $680.00. Venipuncture Fee CPT 36415: $95.00. Total Billed to Patient: $775.00."
+  },
+  {
+    "id": "sample_10",
+    "source_type": "patient_report",
+    "source_url": "https://migraine-advocates-online.org/patient-stories/botox-migraine-denver",
+    "text": "Chronic Migraine Support Group: Completed my third round of OnabotulinumtoxinA (Botox) 155 units protocol with my neurologist in Denver, CO. Monthly headache days dropped dramatically from 22 down to 6. Out-of-pocket copay was $350 after the manufacturer savings program covered the remaining $1,800 drug cost."
+  }
+]

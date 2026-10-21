@@ -1,0 +1,6 @@
+{
+  "id": "sample_08",
+  "source_type": "clinical_note",
+  "source_url": "ehr://st-mary-hospital/discharge-summaries/2026-02-18/dc-118",
+  "text": "HOSPITAL DISCHARGE SUMMARY: 45-year-old female admitted for Community-Acquired Right Lower Lobe Pneumonia. Administered intravenous Ceftriaxone 1g daily for 5 days. Complete resolution of high fever, productive cough, and leukocytosis. Discharged on oral Cefdinir 300mg BID for 5 additional days in stable condition."
+}
