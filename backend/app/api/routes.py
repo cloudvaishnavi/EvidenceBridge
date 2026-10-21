@@ -9,6 +9,8 @@ from fastapi import APIRouter, HTTPException, Query, status
 
 from app.config import get_settings
 from app.models.schemas import (
+    AuditResponse,
+    AuditTrail,
     Claim,
     ClaimListResponse,
     ExtractAndVerifyResponse,
@@ -241,6 +243,7 @@ async def verify_claim_by_id(claim_id: str) -> VerificationResponse:
     return VerificationResponse(
         success=True,
         verification=verification,
+        audit_trail_id=verification.audit_trail_id,
         message=f"Claim '{claim_id}' verified. Verdict: {verification.verdict.value}, Action: {verification.action.value}."
     )
 
@@ -250,7 +253,7 @@ async def verify_claim_by_id(claim_id: str) -> VerificationResponse:
     response_model=ExtractAndVerifyResponse,
     status_code=status.HTTP_201_CREATED,
     summary="Extract claim and verify in one step",
-    description="Submits raw text, runs extraction, binds provenance, and immediately runs clinical evidence verification and cost anomaly checks."
+    description="Submits raw text, runs extraction, binds provenance, and immediately runs clinical evidence verification, cost anomaly checks, and full decision audit logging."
 )
 async def extract_and_verify(request: ExtractionRequest) -> ExtractAndVerifyResponse:
     """Extract structured claim and immediately audit it against knowledge base."""
@@ -321,6 +324,7 @@ async def extract_and_verify(request: ExtractionRequest) -> ExtractAndVerifyResp
         success=True,
         claim=claim,
         verification=verification,
+        audit_trail_id=verification.audit_trail_id,
         stored=stored,
         message=f"Claim extracted and verified. Verdict: {verification.verdict.value}, Action: {verification.action.value}."
     )
@@ -349,3 +353,65 @@ async def get_verification(claim_id: str) -> VerificationResult:
         )
 
     return verification
+
+
+# ==============================================================================
+# Layer 3: Decision Audit Trail Endpoints
+# ==============================================================================
+
+@router.get(
+    "/audit/{claim_id}",
+    response_model=AuditResponse,
+    summary="Get full decision audit trail by claim ID",
+    description="Inspect the complete step-by-step decision graph, considered evidence passages, discard reasons, and rule-based rationale for a claim."
+)
+async def get_audit_trail_by_claim(claim_id: str) -> AuditResponse:
+    """Retrieve complete decision audit trail by claim ID."""
+    try:
+        audit_trail = await storage_service.get_audit_trail_by_claim_id(claim_id)
+    except StorageError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database storage error: {e}"
+        )
+
+    if not audit_trail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No audit trail found for claim ID '{claim_id}'."
+        )
+
+    return AuditResponse(
+        success=True,
+        audit_trail=audit_trail,
+        message="Decision audit trail retrieved successfully"
+    )
+
+
+@router.get(
+    "/audit/verification/{verification_id}",
+    response_model=AuditResponse,
+    summary="Get full decision audit trail by verification ID",
+    description="Retrieve the exact decision graph linked to a specific verification ID."
+)
+async def get_audit_trail_by_verification(verification_id: str) -> AuditResponse:
+    """Retrieve complete decision audit trail by verification ID."""
+    try:
+        audit_trail = await storage_service.get_audit_trail_by_verification_id(verification_id)
+    except StorageError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database storage error: {e}"
+        )
+
+    if not audit_trail:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No audit trail found for verification ID '{verification_id}'."
+        )
+
+    return AuditResponse(
+        success=True,
+        audit_trail=audit_trail,
+        message="Decision audit trail retrieved successfully"
+    )

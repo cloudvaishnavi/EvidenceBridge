@@ -2,16 +2,16 @@
 ### Evidence-Auditing & Cost-Anomaly Engine for Healthcare Claims & Hospital Bills
 
 > **[!IMPORTANT]**
-> **Scope of this Layer (Layer 2):**
-> **This layer adds claim verification and basic cost anomaly detection.** Full hyperlocal trust density and advanced evaluation come later.
+> **Scope of this Layer (Layer 3):**
+> **Layer 3 adds rigorous abstention + full decision audit trail.** Hyperlocal trust density and frontend come later.
 
 ---
 
-EvidenceBridge is an open-source, local-first engine designed to audit healthcare claims, patient reports, and hospital bills. It provides end-to-end traceability, structured clinical/cost extraction, tamper-evident provenance, guideline-backed claim verification, and pricing anomaly detection without relying on paid external APIs.
+EvidenceBridge is an open-source, local-first engine designed to audit healthcare claims, patient reports, and hospital bills. It provides end-to-end traceability, structured clinical/cost extraction, tamper-evident provenance, guideline-backed claim verification, pricing anomaly detection, a deterministic safety-gated abstention policy, and a transparent 7-stage decision graph.
 
 ---
 
-## 🏗️ Architecture (Layer 1 + Layer 2)
+## 🏗️ Architecture (Layers 1, 2, and 3)
 
 ```
                      ┌──────────────────────────────────────────────┐
@@ -52,33 +52,40 @@ EvidenceBridge is an open-source, local-first engine designed to audit healthcar
        │ MongoDB Document Store    │                 │ Local Knowledge Base      │
        │ - "claims" collection     │                 │ - Clinical Guidelines     │
        │ - "verifications" coll    │                 │ - Public Price Benchmarks │
-       └─────────────▲─────────────┘                 └─────────────┬─────────────┘
+       │ - "audit_trails" coll     │                 └─────────────┬─────────────┘
+       └─────────────▲─────────────┘                               │
                      │                                             │
                      │         ┌───────────────────────────────────┘
                      │         │
                      │         ▼
        ┌─────────────┴───────────────────────────────────────────────────────────┐
-       │ Layer 2: Claim Verification & Cost Anomaly Engine                       │
+       │ Layer 2 & 3: Verification, Cost Anomaly & Audit Trail Engine           │
        │                                                                         │
-       │ 1. Evidence Retrieval:                                                  │
-       │    - Hybrid ChromaDB Vector Search + Keyword Corroboration              │
-       │    - Retrieves top-k authoritative medical guideline passages           │
+       │ 1. Hybrid Retrieval & Ranking (BM25 + ChromaDB Vector):                 │
+       │    - Combines term frequency & IDF with vector embeddings               │
+       │    - Entity anchor boosting and relevance threshold gating (0.35)       │
+       │    - Explicitly labels used passages vs discarded (with reason)         │
        │                                                                         │
-       │ 2. Support Scoring (Ollama LLM):                                        │
-       │    - "supported"             (0.70 - 1.00)                              │
-       │    - "partially_supported"   (0.40 - 0.69)                              │
-       │    - "contradicted"          (0.00 - 0.39)                              │
-       │    - "insufficient_evidence" (0.00 - 0.30)                              │
-       │                                                                         │
-       │ 3. Cost Anomaly Detection:                                              │
-       │    - Compares billed price against CMS Medicare / Fair Health max       │
-       │    - Flags if price > threshold multiplier (default: 3.0×)              │
+       │ 2. Cost Anomaly Detection:                                              │
+       │    - Evaluates billed charges against CMS/NADAC price benchmarks        │
+       │    - Flags markups exceeding threshold multiplier (default: 3.0×)       │
        │    - Categorizes severity: Moderate (3×), Severe (5×), Extreme (10×+)   │
        │                                                                         │
-       │ 4. Decision Synthesis:                                                  │
-       │    - [ACCEPT]  -> Supported evidence + normal cost                      │
-       │    - [FLAG]    -> Contradicted, partially supported, or cost anomaly    │
-       │    - [ABSTAIN] -> Insufficient evidence in knowledge base               │
+       │ 3. Deterministic Abstention Policy Gates:                               │
+       │    - [Rule 1] ENTITY_NOT_FOUND: Entity empty or unrecognized            │
+       │    - [Rule 2] NO_RELEVANT_EVIDENCE: All passages below threshold (0.35) │
+       │    - [Rule 3] CONFLICTING_EVIDENCE: Conflicting guideline consensus     │
+       │    - [Rule 4] LOW_MODEL_CONFIDENCE: Score < 0.40 without contradiction  │
+       │    - [Rule 5] UNBENCHMARKED_HIGH_COST: Charge > $100 with no benchmark  │
+       │                                                                         │
+       │ 4. Support Scoring (Ollama LLM):                                        │
+       │    - Evaluates usable evidence: "supported", "partially_supported",     │
+       │      "contradicted", or "insufficient_evidence"                         │
+       │                                                                         │
+       │ 5. Full Decision Audit Trail (7 Stages):                                │
+       │    EXTRACTION ➔ PROVENANCE ➔ RETRIEVAL ➔ COST_AUDIT ➔                   │
+       │    CLINICAL_VERIFICATION ➔ ABSTENTION_GATE ➔ FINAL_ACTION              │
+       │    [Persisted in MongoDB "audit_trails" linked to claim & verif ID]     │
        └─────────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -92,18 +99,20 @@ evidencebridge/
 │   ├── app/
 │   │   ├── api/
 │   │   │   ├── __init__.py
-│   │   │   └── routes.py             # FastAPI routes (/extract, /verify, /extract-and-verify, /health)
+│   │   │   └── routes.py             # FastAPI routes (/extract, /verify, /audit, /health)
 │   │   ├── models/
 │   │   │   ├── __init__.py
-│   │   │   └── schemas.py            # Pydantic models (Claim, VerificationResult, CostBenchmark)
+│   │   │   └── schemas.py            # Pydantic models (Claim, VerificationResult, AuditTrail)
 │   │   ├── services/
 │   │   │   ├── __init__.py
+│   │   │   ├── abstention.py         # Deterministic 5-rule safety abstention engine
+│   │   │   ├── audit.py              # 7-stage decision graph & audit trail service
 │   │   │   ├── cost_anomaly.py       # Cost anomaly detection service (CMS/NADAC benchmarks)
 │   │   │   ├── extraction.py         # Ollama structured JSON extraction pipeline
 │   │   │   ├── provenance.py         # SHA-256 hashing & source metadata linkage
-│   │   │   ├── storage.py            # Async MongoDB storage service (claims & verifications)
+│   │   │   ├── storage.py            # Async MongoDB storage service (claims, verifs, audits)
 │   │   │   ├── vector_store.py       # Local ChromaDB vector indexing (offline semantic store)
-│   │   │   └── verification.py       # Evidence retrieval & LLM support scoring engine
+│   │   │   └── verification.py       # Hybrid retrieval & Ollama support scoring engine
 │   │   ├── utils/
 │   │   │   ├── __init__.py
 │   │   │   └── logger.py             # Formatted logging utility
@@ -111,12 +120,15 @@ evidencebridge/
 │   │   └── main.py                   # FastAPI application initialization & lifespan
 │   ├── tests/
 │   │   ├── conftest.py               # Shared pytest fixtures
-│   │   ├── test_api.py               # FastAPI endpoint integration tests
+│   │   ├── test_abstention.py        # Tests for all 5 deterministic abstention rules
+│   │   ├── test_api.py               # FastAPI endpoint integration tests (including audit)
+│   │   ├── test_audit.py             # 7-stage decision graph & passage lineage tests
 │   │   ├── test_cost_anomaly.py      # Benchmark matching & cost markup multiplier tests
 │   │   ├── test_extraction.py        # Extraction parsing and fallback tests
 │   │   ├── test_provenance.py        # Cryptographic hashing & tamper-check tests
+│   │   ├── test_retrieval_ranking.py # BM25 + Vector hybrid ranking and threshold tests
 │   │   ├── test_schemas.py           # Pydantic schema validation tests
-│   │   └── test_verification.py      # Support scoring, contradiction, and abstention tests
+│   │   └── test_verification.py      # Support scoring, contradiction, and action tests
 │   ├── Dockerfile                    # Container definition for backend
 │   └── requirements.txt              # Core Python dependencies
 ├── data/
@@ -150,67 +162,44 @@ evidencebridge/
 
 ---
 
-## ⚖️ The Verdict & Action Decision Framework
+## 🛡️ The 5 Deterministic Abstention Rules
 
-EvidenceBridge separates clinical truth from billing fairness to form an auditable decision:
+In high-stakes healthcare auditing, **guessing is unacceptable**. EvidenceBridge enforces deterministic abstention safety gates before and after model judgment:
 
-### 1. Evidence Verdicts
-| Verdict | Support Score | Clinical Interpretation |
-| :--- | :---: | :--- |
-| **`supported`** | `0.70 – 1.00` | Authoritative guideline directly validates the indication, drug, procedure, and outcome. |
-| **`partially_supported`** | `0.40 – 0.69` | Treatment is recognized, but details (outcome, dosage, context) are partially atypical or incomplete. |
-| **`contradicted`** | `0.00 – 0.39` | Clinical guideline **explicitly refutes** the claim (e.g., prescribing Azithromycin for viral bronchitis). |
-| **`insufficient_evidence`** | `0.00 – 0.30` | No relevant medical guidelines or clinical facts exist in the knowledge base. |
+| Rule Name | Trigger Condition | Explainable Rationale |
+| :--- | :--- | :--- |
+| **`ENTITY_NOT_FOUND`** | Entity is empty, null, or generic `"unspecified"`. | Cannot verify a claim whose primary medical entity cannot be resolved. |
+| **`NO_RELEVANT_EVIDENCE`** | Zero guideline passages achieve composite relevance score $\ge 0.35$. | Refuses to hallucinate a judgment when no authoritative guidelines exist in knowledge base. |
+| **`CONFLICTING_EVIDENCE`** | Multiple guidelines of similar strength conflict or lack medical consensus. | Protects against false certainty when clinical literature is divided. |
+| **`LOW_MODEL_CONFIDENCE`** | Verification support score $< 0.40$ without an explicit contradiction. | Weak evidence links without refutation require human review. |
+| **`UNBENCHMARKED_HIGH_COST`**| Financial charge reported ($\ge \$100$), but no public pricing benchmark exists. | Avoids asserting whether a high cost is fair or anomalous without ground truth benchmarks. |
 
-### 2. Action Decisions
-- **`ACCEPT`**: Evidence verdict is `supported` (score $\ge 0.70$) AND billed price is within normal benchmark range.
-- **`FLAG`**: Triggered when a claim is `contradicted`, `partially_supported`, or contains a **cost anomaly** (> 3.0× benchmark max).
-- **`ABSTAIN`**: Triggered when evidence is `insufficient_evidence` (zero matching guidelines in local knowledge base). **Prevents hallucination** by refusing to fabricate a verification judgment.
+---
 
-### 3. Cost Anomaly Severity
-Configured by `COST_ANOMALY_THRESHOLD_MULTIPLIER` in `.env` (default: `3.0`):
-- **`extreme`**: Billed price $\ge 10.0\times$ benchmark max (e.g., $74/pill for 500mg Tylenol vs $1.00 benchmark, or $720 for normal saline IV vs $45 benchmark).
-- **`severe`**: Billed price $\ge 5.0\times$ benchmark max.
-- **`moderate`**: Billed price $\ge 3.0\times$ benchmark max (e.g., $4,850 for Level 5 ER visit vs $1,500 benchmark).
-- **`none`**: Within typical range or below anomaly threshold.
+## 📜 The 7-Stage Decision Audit Graph
+
+Every verified claim produces an immutable `AuditTrail` record in MongoDB capturing the exact execution lineage:
+
+1. **`EXTRACTION`**: Input text length, extracted entity, reported outcome, cost string, sentiment, and model confidence.
+2. **`PROVENANCE`**: SHA-256 cryptographic digest verification, anchor snippet, source document URL.
+3. **`HYBRID_RETRIEVAL`**: Total passages retrieved, ranked BM25 + Vector scores, passages marked `used_in_decision=True`, and passages marked `used_in_decision=False` with explicit `discard_reason`.
+4. **`COST_AUDIT`**: Extracted dollar amount, benchmark minimum and maximum, markup multiplier, anomaly flag, and severity level.
+5. **`CLINICAL_VERIFICATION`**: Prompt sent to Ollama, raw response, parsed verdict, support score ($0.0 - 1.0$), and citation reasoning.
+6. **`ABSTENTION_GATE`**: Status of all 5 deterministic safety rules and detailed trigger explanation.
+7. **`FINAL_ACTION`**: Composite decision (`ACCEPT`, `FLAG`, or `ABSTAIN`) with full audit trail cross-referencing.
 
 ---
 
 ## ⚙️ Quickstart
 
-### Option 1: Docker Compose (Local MongoDB + Backend)
+### 1. Prerequisites
+- **Python 3.11+**
+- **Ollama** installed ([https://ollama.com/download](https://ollama.com/download)) with model `phi3:mini` or `llama3.1:8b`
+- **MongoDB** running locally (`mongodb://localhost:27017`) or free Atlas instance
 
-1. **Clone repository:**
-   ```bash
-   git clone https://github.com/your-username/evidencebridge.git
-   cd evidencebridge
-   ```
-
-2. **Copy configuration:**
-   ```bash
-   cp .env.example .env
-   ```
-
-3. **Start local Ollama on host and pull default model:**
-   ```bash
-   ollama serve
-   ollama pull phi3:mini
-   ```
-
-4. **Launch containers:**
-   ```bash
-   docker compose up --build
-   ```
-   API is now live at: `http://localhost:8000` (Swagger Docs: `http://localhost:8000/docs`).
-
----
-
-### Option 2: Local Python Setup (100% Offline / Local-First)
-
-#### 1. Setup Ollama
+### 2. Setup Ollama
 On Linux/macOS:
 ```bash
-chmod +x scripts/setup_ollama.sh
 ./scripts/setup_ollama.sh
 ```
 On Windows (PowerShell):
@@ -218,12 +207,7 @@ On Windows (PowerShell):
 .\scripts\setup_ollama.ps1
 ```
 
-#### 2. Start Local MongoDB
-```bash
-docker run -d -p 27017:27017 --name mongo-evidencebridge mongo:7.0
-```
-
-#### 3. Setup Python Virtual Environment
+### 3. Setup Virtual Environment & Dependencies
 ```bash
 python -m venv .venv
 
@@ -233,15 +217,14 @@ source .venv/bin/activate
 # On Windows:
 .venv\Scripts\Activate.ps1
 
-# Install dependencies
 pip install -r backend/requirements.txt
 ```
 
-#### 4. Configure Environment
+### 4. Configure Environment
 ```bash
 cp .env.example .env
 ```
-Key settings in `.env`:
+Default configuration values in `.env`:
 ```env
 APP_NAME=EvidenceBridge
 PORT=8000
@@ -251,41 +234,28 @@ OLLAMA_BASE_URL=http://localhost:11434
 OLLAMA_MODEL=phi3:mini
 KNOWLEDGE_BASE_DIR=./data/knowledge
 COST_ANOMALY_THRESHOLD_MULTIPLIER=3.0
+RETRIEVAL_RELEVANCE_THRESHOLD=0.35
+MIN_CONFIDENCE_THRESHOLD=0.40
 ```
 
-#### 5. Launch Backend
+### 5. Launch Backend
 ```bash
 cd backend
 uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
 ```
-
----
-
-## 🧪 Seeding & Auditing Sample Data
-
-EvidenceBridge includes 13 realistic healthcare records:
-- **Clinical Notes**: Diabetes titration (Metformin), hypertension (Lisinopril), pneumonia (Ceftriaxone), and viral bronchitis ([CONTRADICTED: Azithromycin]).
-- **Patient Reports**: Ozempic weight loss, knee surgery surprise bills, migraine Botox protocol, and rare unverified tincture ([ABSTAIN]).
-- **Hospital Bills**: Inflated ER visit ($6,825), $74 Tylenol pill markup ([EXTREME ANOMALY]), knee MRI facility fees, and $720 Normal Saline bag ([EXTREME ANOMALY]).
-
-### Ingest and verify all samples:
-```bash
-python scripts/seed_data.py --url http://localhost:8000 --verify
-```
+Interactive Swagger documentation is available at `http://localhost:8000/docs`.
 
 ---
 
 ## 📡 Example API Requests (cURL)
 
-### 1. Ingest, Extract & Verify in One Call (`POST /extract-and-verify`)
-Audit an inpatient bill line item with extreme pricing markup:
+### 1. Extract & Verify with Decision Audit Logging (`POST /extract-and-verify`)
 ```bash
 curl -X POST http://localhost:8000/extract-and-verify \
   -H "Content-Type: application/json" \
   -d '{
-    "text": "MIDWEST GENERAL HOSPITAL: 0.9% Sodium Chloride (Normal Saline) IV Solution, 1,000 mL infusion bag (HCPCS J7030). Quantity Dispensed: 1. Unit Billed Charge: $720.00.",
-    "source_type": "hospital_bill",
-    "store_claim": true
+    "text": "MIDWEST GENERAL HOSPITAL: 0.9% Sodium Chloride (Normal Saline) IV Solution, 1,000 mL infusion bag. Unit Billed Charge: $720.00.",
+    "source_type": "hospital_bill"
   }'
 ```
 **Response Preview:**
@@ -297,98 +267,127 @@ curl -X POST http://localhost:8000/extract-and-verify \
     "extracted_fields": {
       "entity": "0.9% Sodium Chloride (Normal Saline) IV Solution, 1,000 mL",
       "cost_range": "$720.00"
-    },
-    "provenance": {
-      "source_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
     }
   },
   "verification": {
+    "verification_id": "ver_41c0e39a2b1f4812",
+    "audit_trail_id": "aud_7b819a00e54d3129",
     "verdict": "supported",
     "support_score": 0.88,
     "action": "flag",
     "cost_anomaly_flag": true,
     "anomaly_details": {
       "is_anomaly": true,
-      "extracted_amount": 720.0,
-      "benchmark_max": 45.0,
       "multiplier": 16.0,
-      "severity": "extreme",
-      "explanation": "COST ANOMALY DETECTED: Billed amount of $720.00 is 16.0× higher than the benchmark maximum of $45.00 (typical range: $5.00 - $45.00 per 1,000 mL IV bag)."
-    },
-    "reasoning": "Normal saline is standard for IV hydration, but unit pricing is flagged as an extreme cost anomaly."
+      "severity": "extreme"
+    }
+  },
+  "audit_trail_id": "aud_7b819a00e54d3129"
+}
+```
+
+---
+
+### 2. Inspect Full Decision Audit Trail (`GET /audit/{claim_id}`)
+Retrieve the full 7-stage decision graph, passages considered, and discard reasons:
+```bash
+curl -X GET http://localhost:8000/audit/clm_8f2b4e19c0a34b92
+```
+**Response Preview:**
+```json
+{
+  "success": true,
+  "audit_trail": {
+    "audit_id": "aud_7b819a00e54d3129",
+    "claim_id": "clm_8f2b4e19c0a34b92",
+    "verification_id": "ver_41c0e39a2b1f4812",
+    "steps": [
+      {
+        "step_name": "EXTRACTION",
+        "output_summary": "Extracted Entity='0.9% Sodium Chloride Normal Saline 1,000 mL', Cost='$720.00', Confidence=0.94"
+      },
+      {
+        "step_name": "PROVENANCE",
+        "output_summary": "Cryptographic digest=e3b0c44298fc1c14... Snippet='MIDWEST GENERAL HOSPITAL...'"
+      },
+      {
+        "step_name": "HYBRID_RETRIEVAL",
+        "output_summary": "Retrieved 5 passages (1 used, 4 discarded). Top relevance score=0.88"
+      },
+      {
+        "step_name": "COST_AUDIT",
+        "output_summary": "Anomaly=True, Severity=EXTREME, Multiplier=16.0×. Billed amount of $720.00 is 16.0× higher than benchmark max of $45.00."
+      },
+      {
+        "step_name": "CLINICAL_VERIFICATION",
+        "output_summary": "Verdict=supported, SupportScore=0.88, Reasoning='Normal saline is standard for IV hydration...'"
+      },
+      {
+        "step_name": "ABSTENTION_GATE",
+        "output_summary": "AbstainTriggered=False, Rule=NONE. Reason='Passed all safety gates'"
+      },
+      {
+        "step_name": "FINAL_ACTION",
+        "output_summary": "Action=FLAG, Verdict=supported, CostAnomalyFlag=True"
+      }
+    ],
+    "passages_considered": [
+      {
+        "passage_id": "pas_88a10b",
+        "title": "USP & CDC Clinical Guidelines: 0.9% Sodium Chloride (Normal Saline) IV Solution",
+        "relevance_score": 0.88,
+        "used_in_decision": true,
+        "discard_reason": null
+      },
+      {
+        "passage_id": "pas_99c21d",
+        "title": "ADA Standards of Care: Metformin in Type 2 Diabetes Mellitus",
+        "relevance_score": 0.12,
+        "used_in_decision": false,
+        "discard_reason": "Below relevance threshold 0.35 (score: 0.12)"
+      }
+    ],
+    "final_action": "flag",
+    "cost_anomaly_flag": true
   }
 }
 ```
 
 ---
 
-### 2. Verify an Existing Claim by ID (`POST /verify/{claim_id}`)
+### 3. Inspect Audit Trail by Verification ID (`GET /audit/verification/{verification_id}`)
 ```bash
-curl -X POST http://localhost:8000/verify/clm_8f2b4e19c0a34b92
+curl -X GET http://localhost:8000/audit/verification/ver_41c0e39a2b1f4812
 ```
 
 ---
 
-### 3. Retrieve Verification Result (`GET /verification/{claim_id}`)
-```bash
-curl -X GET http://localhost:8000/verification/clm_8f2b4e19c0a34b92
-```
+## 🧪 Automated Test Suite
 
----
-
-### 4. Handling Contradicted Clinical Claims
-When evaluating `sample_11` (prescribing Azithromycin for acute viral bronchitis):
-```bash
-curl -X POST http://localhost:8000/extract-and-verify \
-  -H "Content-Type: application/json" \
-  -d '{
-    "text": "Assessment: Acute viral bronchitis. Treatment: Prescribed Azithromycin 250 mg (Z-Pak) 6 tablets for acute bacterial clearance.",
-    "source_type": "clinical_note"
-  }'
-```
-**Result:**
-- `verdict`: `"contradicted"`
-- `support_score`: `0.10`
-- `action`: `"flag"`
-- `reasoning`: `"CDC and GOLD guidelines explicitly state that antibiotics are not recommended for uncomplicated acute bronchitis because >90% of cases are viral and antibiotics do not alter illness duration."`
-
----
-
-### 5. Abstention on Unverified / Unknown Entities
-When evaluating `sample_13` (unverified "Himalayan Blue Root Tincture"):
-**Result:**
-- `verdict`: `"insufficient_evidence"`
-- `support_score`: `0.0`
-- `action`: `"abstain"`
-- `abstain_reason`: `"Zero matching clinical evidence in local knowledge base for entity 'Himalayan Blue Root Tincture'."`
-
----
-
-## 🧪 Running Automated Tests
-
-Run the complete test suite (32 unit & integration tests):
+Run all 49 unit and integration tests:
 ```bash
 pytest backend/tests -v
 ```
 
 Tests cover:
-- ✅ **Schemas**: Validation, constraints, and Layer 2 models
+- ✅ **Schemas**: Complete validation of Claim, VerificationResult, and AuditTrail models
 - ✅ **Provenance**: SHA-256 cryptographic digests & tamper detection
 - ✅ **Extraction**: Ollama structured JSON parsing & markdown stripping
 - ✅ **Cost Anomaly Detection**: Numeric extraction, CPT code matching, extreme markup multiplier ($74 Tylenol, $720 Saline)
-- ✅ **Claim Verification**: Guideline retrieval, Ollama verdict parsing, support scoring
-- ✅ **Abstention Logic**: Refusal to score claims lacking ground-truth evidence
-- ✅ **FastAPI Endpoints**: `/extract`, `/verify/{id}`, `/extract-and-verify`, `/verification/{id}`
+- ✅ **Hybrid Retrieval Quality**: BM25 + Vector ranking, entity anchoring, used vs discarded passage labeling
+- ✅ **Abstention Policy Gates**: Deterministic enforcement of all 5 safety rules (missing entity, no evidence, conflicting guidelines, low confidence, unbenchmarked high cost)
+- ✅ **Decision Audit Trail**: Full 7-stage decision graph recording and verification ID linkage
+- ✅ **FastAPI Endpoints**: `/extract`, `/verify/{id}`, `/extract-and-verify`, `/verification/{id}`, `/audit/{claim_id}`, `/audit/verification/{verif_id}`
 
 ---
 
-## 🗺️ Roadmap & Later Layers
+## 🗺️ Roadmap & Next Layers
 
 - [x] **Layer 1:** Local Ingestion, Ollama structured extraction, tamper-evident provenance, MongoDB storage.
-- [x] **Layer 2 (This Layer):** Claim Verification, Support Scoring (0.0-1.0), Decision Triad (ACCEPT, FLAG, ABSTAIN), and Basic Cost Anomaly Detection against public CMS/Fair Health benchmarks.
-- [ ] **Layer 3:** Statistical Cost Anomaly Engine (geographic cost indexing, unbundled code detection, CMS outlier percentiles).
+- [x] **Layer 2:** Claim Verification, Support Scoring ($0.0-1.0$), Decision Triad (ACCEPT, FLAG, ABSTAIN), and Basic Cost Anomaly Detection against public CMS/Fair Health benchmarks.
+- [x] **Layer 3 (This Layer):** Rigorous 5-Rule Abstention Engine, BM25 + Vector Hybrid Retrieval Ranking, and Full 7-Stage Decision Audit Graph.
 - [ ] **Layer 4:** Hyperlocal Trust Density Framework (ZIP/city-level provider density, source credibility scoring).
-- [ ] **Layer 5:** High-Performance Verification Engine & Interactive Dashboard.
+- [ ] **Layer 5:** High-Performance Verification Engine & Interactive Web Dashboard.
 
 ---
 

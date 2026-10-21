@@ -1,9 +1,13 @@
 """Models module."""
 from app.models.schemas import (
+    AuditResponse,
+    AuditTrail,
     Claim,
     ClaimListResponse,
     CostAnomalyDetails,
     CostBenchmark,
+    DecisionStep,
+    EvidencePassage,
     EvidenceSnippet,
     ExtractAndVerifyResponse,
     ExtractedFields,
@@ -20,10 +24,14 @@ from app.models.schemas import (
 )
 
 __all__ = [
+    "AuditResponse",
+    "AuditTrail",
     "Claim",
     "ClaimListResponse",
     "CostAnomalyDetails",
     "CostBenchmark",
+    "DecisionStep",
+    "EvidencePassage",
     "EvidenceSnippet",
     "ExtractAndVerifyResponse",
     "ExtractedFields",

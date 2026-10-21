@@ -6,6 +6,7 @@ Defines core data models for Claims, Provenance, Extraction, and API contracts.
 from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Optional
+import uuid
 from pydantic import BaseModel, ConfigDict, Field
 
 
@@ -249,6 +250,46 @@ class EvidenceSnippet(BaseModel):
     relevance_score: Optional[float] = None
 
 
+class EvidencePassage(BaseModel):
+    """
+    Detailed evidence passage evaluated during hybrid retrieval,
+    tracking relevance score, whether it was utilized, or why it was discarded.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    passage_id: str = Field(
+        default_factory=lambda: f"pas_{uuid.uuid4().hex[:12]}",
+        description="Unique passage identifier"
+    )
+    guideline_id: Optional[str] = None
+    title: str
+    source: str
+    text: str
+    relevance_score: float = Field(
+        ...,
+        description="Composite relevance score (0.0 to 1.0) combining vector similarity & BM25 keyword match"
+    )
+    used_in_decision: bool = Field(
+        default=True,
+        description="Whether this passage exceeded the relevance threshold and was fed to the verification model"
+    )
+    discard_reason: Optional[str] = Field(
+        default=None,
+        description="Reason for discarding (e.g. 'Below relevance threshold 0.35', 'Entity mismatch')"
+    )
+
+
+class DecisionStep(BaseModel):
+    """Single auditable execution step in the claim processing and verification pipeline."""
+    model_config = ConfigDict(extra="ignore")
+
+    step_name: str = Field(..., description="Stage name (e.g. EXTRACTION, RETRIEVAL, COST_CHECK, ABSTENTION_GATE, FINAL_ACTION)")
+    input_summary: str
+    output_summary: str
+    details: Optional[dict[str, Any]] = None
+    timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class VerificationResult(BaseModel):
     """
     Complete audit result for an extracted claim:
@@ -256,7 +297,15 @@ class VerificationResult(BaseModel):
     """
     model_config = ConfigDict(extra="ignore")
 
+    verification_id: str = Field(
+        default_factory=lambda: f"ver_{uuid.uuid4().hex[:16]}",
+        description="Unique verification audit identifier"
+    )
     claim_id: str
+    audit_trail_id: Optional[str] = Field(
+        default=None,
+        description="Reference to full decision audit trail"
+    )
     support_score: float = Field(
         ...,
         ge=0.0,
@@ -267,16 +316,42 @@ class VerificationResult(BaseModel):
     action: VerificationAction
     reasoning: str
     evidence_snippets: list[EvidenceSnippet] = Field(default_factory=list)
+    passages_considered: list[EvidencePassage] = Field(default_factory=list)
     cost_anomaly_flag: bool = False
     anomaly_details: Optional[CostAnomalyDetails] = None
     abstain_reason: Optional[str] = None
     verified_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
 
 
+class AuditTrail(BaseModel):
+    """
+    Full transparent decision graph and lineage for a claim:
+    tracks all intermediate pipeline steps, considered evidence, and exact rationale.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    audit_id: str = Field(
+        default_factory=lambda: f"aud_{uuid.uuid4().hex[:16]}",
+        description="Unique audit identifier"
+    )
+    claim_id: str
+    verification_id: str
+    steps: list[DecisionStep] = Field(default_factory=list)
+    passages_considered: list[EvidencePassage] = Field(default_factory=list)
+    final_verdict: Optional[VerificationVerdict] = None
+    final_action: VerificationAction
+    final_reasoning: str
+    abstain_triggered: bool = False
+    abstain_reason: Optional[str] = None
+    cost_anomaly_flag: bool = False
+    created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
 class VerificationResponse(BaseModel):
     """Response returned by verification endpoint."""
     success: bool = True
     verification: VerificationResult
+    audit_trail_id: Optional[str] = None
     message: str = "Claim verification completed successfully"
 
 
@@ -285,5 +360,13 @@ class ExtractAndVerifyResponse(BaseModel):
     success: bool = True
     claim: Claim
     verification: VerificationResult
+    audit_trail_id: Optional[str] = None
     stored: bool
     message: str = "Claim extracted, verified, and linked with provenance"
+
+
+class AuditResponse(BaseModel):
+    """Response returned by audit trail endpoint."""
+    success: bool = True
+    audit_trail: AuditTrail
+    message: str = "Audit trail retrieved successfully"

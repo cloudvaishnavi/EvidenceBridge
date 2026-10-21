@@ -26,6 +26,7 @@ class Settings(BaseSettings):
     MONGODB_DB_NAME: str = "evidencebridge"
     MONGODB_CLAIMS_COLLECTION: str = "claims"
     MONGODB_VERIFICATIONS_COLLECTION: str = "verifications"
+    MONGODB_AUDIT_TRAILS_COLLECTION: str = "audit_trails"
     MONGODB_TIMEOUT_MS: int = 4000
 
     # Ollama Local LLM Configuration
@@ -36,6 +37,9 @@ class Settings(BaseSettings):
     # Knowledge Base & Verification
     KNOWLEDGE_BASE_DIR: str = "./data/knowledge"
     COST_ANOMALY_THRESHOLD_MULTIPLIER: float = 3.0
+    RETRIEVAL_RELEVANCE_THRESHOLD: float = 0.35
+    MIN_CONFIDENCE_THRESHOLD: float = 0.40
+    ABSTAIN_ON_UNBENCHMARKED_HIGH_COST: bool = True
 
     # Vector Store Configuration
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"

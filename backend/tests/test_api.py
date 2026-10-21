@@ -9,8 +9,11 @@ import pytest
 
 from app.main import app
 from app.models.schemas import (
+    AuditTrail,
     Claim,
     CostAnomalyDetails,
+    DecisionStep,
+    EvidencePassage,
     EvidenceSnippet,
     ExtractedFields,
     ProvenanceMetadata,
@@ -291,4 +294,98 @@ def test_get_verification_by_id_not_found(mock_get_verif, client):
     response = client.get("/verification/clm_nonexistent")
     assert response.status_code == 404
     assert "no verification record found" in response.json()["detail"].lower()
+
+
+# ==============================================================================
+# Layer 3: Decision Audit Trail Endpoint Tests
+# ==============================================================================
+
+@patch("app.api.routes.storage_service.get_audit_trail_by_claim_id")
+def test_get_audit_by_claim_id_found(mock_get_audit, client):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    mock_audit = AuditTrail(
+        audit_id="aud_123456",
+        claim_id="clm_audit_claim",
+        verification_id="ver_audit_verif",
+        steps=[
+            DecisionStep(
+                step_name="EXTRACTION",
+                input_summary="Input note",
+                output_summary="Entity=Metformin",
+                details={},
+                timestamp=now
+            )
+        ],
+        passages_considered=[
+            EvidencePassage(
+                passage_id="pas_001",
+                title="ADA Guidelines",
+                source="ADA",
+                text="Text...",
+                relevance_score=0.95,
+                used_in_decision=True
+            )
+        ],
+        final_verdict=VerificationVerdict.SUPPORTED,
+        final_action=VerificationAction.ACCEPT,
+        final_reasoning="Verified via guidelines",
+        abstain_triggered=False,
+        abstain_reason=None,
+        cost_anomaly_flag=False,
+        created_at=now
+    )
+    mock_get_audit.return_value = mock_audit
+
+    response = client.get("/audit/clm_audit_claim")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["audit_trail"]["audit_id"] == "aud_123456"
+    assert data["audit_trail"]["claim_id"] == "clm_audit_claim"
+    assert len(data["audit_trail"]["steps"]) == 1
+    assert data["audit_trail"]["final_action"] == "accept"
+
+
+@patch("app.api.routes.storage_service.get_audit_trail_by_claim_id")
+def test_get_audit_by_claim_id_not_found(mock_get_audit, client):
+    mock_get_audit.return_value = None
+    response = client.get("/audit/clm_missing_audit")
+    assert response.status_code == 404
+    assert "no audit trail found" in response.json()["detail"].lower()
+
+
+@patch("app.api.routes.storage_service.get_audit_trail_by_verification_id")
+def test_get_audit_by_verification_id_found(mock_get_audit, client):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    mock_audit = AuditTrail(
+        audit_id="aud_verif_999",
+        claim_id="clm_target",
+        verification_id="ver_target",
+        steps=[],
+        passages_considered=[],
+        final_verdict=VerificationVerdict.SUPPORTED,
+        final_action=VerificationAction.ACCEPT,
+        final_reasoning="Direct pass",
+        abstain_triggered=False,
+        created_at=now
+    )
+    mock_get_audit.return_value = mock_audit
+
+    response = client.get("/audit/verification/ver_target")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["audit_trail"]["verification_id"] == "ver_target"
+    assert data["audit_trail"]["audit_id"] == "aud_verif_999"
+
+
+@patch("app.api.routes.storage_service.get_audit_trail_by_verification_id")
+def test_get_audit_by_verification_id_not_found(mock_get_audit, client):
+    mock_get_audit.return_value = None
+    response = client.get("/audit/verification/ver_missing")
+    assert response.status_code == 404
+    assert "no audit trail found" in response.json()["detail"].lower()
 

@@ -1,26 +1,31 @@
 """
-Claim Verification & Support Scoring Service for EvidenceBridge.
-Retrieves relevant clinical guidelines and evidence passages from the local knowledge base,
-prompts the local Ollama LLM to judge support vs contradiction,
-and combines clinical evidence with cost anomaly detection to produce an audit verdict.
+Claim Verification, Support Scoring & Hybrid Retrieval Service for EvidenceBridge.
+Combines ChromaDB vector search + BM25 term weighting for evidence ranking,
+enforces strict deterministic abstention safety gates, and records complete decision audit trails.
 """
 
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any, Optional
+import uuid
 import httpx
 
 from app.config import get_settings
 from app.models.schemas import (
+    AuditTrail,
     Claim,
     CostAnomalyDetails,
+    EvidencePassage,
     EvidenceSnippet,
     VerificationAction,
     VerificationResult,
     VerificationVerdict,
 )
+from app.services.abstention import abstention_service
+from app.services.audit import audit_service
 from app.services.cost_anomaly import cost_anomaly_service
 from app.services.extraction import ExtractionError, OllamaConnectionError
 from app.services.vector_store import vector_store_service
@@ -60,6 +65,7 @@ class VerificationService:
         self.base_url = (base_url or self.settings.OLLAMA_BASE_URL).rstrip("/")
         self.model = model or self.settings.OLLAMA_MODEL
         self.timeout = self.settings.OLLAMA_TIMEOUT_SECONDS
+        self.relevance_threshold = self.settings.RETRIEVAL_RELEVANCE_THRESHOLD
         self.guidelines_file = self._resolve_guidelines_path()
         self.guidelines: list[dict[str, Any]] = []
         self._guidelines_indexed = False
@@ -121,18 +127,88 @@ class VerificationService:
         except Exception as e:
             logger.warning(f"Could not index guidelines into ChromaDB (will use keyword search fallback): {e}")
 
-    def retrieve_evidence_passages(self, entity: str, claim_text: str, k: int = 3) -> list[EvidenceSnippet]:
+    def _compute_bm25_scores(self, query_tokens: list[str], entity_tokens: set[str]) -> dict[str, float]:
         """
-        Retrieve top-k relevant clinical guidelines using hybrid search:
-        ChromaDB semantic retrieval with keyword corroboration.
+        Compute BM25-style scores for all guidelines based on query and entity tokens.
+        Includes TF saturation (k1=1.5), length normalization (b=0.75), and IDF term weighting.
+        """
+        scores: dict[str, float] = {}
+        if not self.guidelines or not query_tokens:
+            return scores
+
+        N = len(self.guidelines)
+        k1 = 1.5
+        b = 0.75
+
+        # Document lengths (in tokens)
+        doc_lens = {
+            g["guideline_id"]: len(re.findall(r"\w+", f"{g['title']} {' '.join(g.get('topics', []))} {g['text']}".lower()))
+            for g in self.guidelines
+        }
+        avg_len = sum(doc_lens.values()) / max(N, 1)
+
+        # Document frequency (DF) per token
+        df: dict[str, int] = {}
+        for token in query_tokens:
+            df[token] = sum(
+                1 for g in self.guidelines
+                if token in g["title"].lower() or token in g["text"].lower() or any(token in t.lower() for t in g.get("topics", []))
+            )
+
+        for g in self.guidelines:
+            gid = g["guideline_id"]
+            d_len = doc_lens.get(gid, avg_len)
+            title_text = g["title"].lower()
+            body_text = g["text"].lower()
+            topics_text = " ".join(g.get("topics", [])).lower()
+            combined_text = f"{title_text} {topics_text} {body_text}"
+
+            score = 0.0
+            for token in query_tokens:
+                # Term frequency with extra weight for titles and topics
+                tf = (
+                    combined_text.count(token)
+                    + title_text.count(token) * 2.0
+                    + topics_text.count(token) * 3.0
+                )
+                if tf == 0:
+                    continue
+
+                # IDF
+                token_df = df.get(token, 0)
+                idf = math.log((N - token_df + 0.5) / (token_df + 0.5) + 1.0)
+
+                # TF saturation with length normalization
+                tf_norm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (d_len / avg_len)))
+                score += idf * tf_norm
+
+            # Significant entity anchor boost
+            entity_matches = sum(1 for t in entity_tokens if len(t) >= 4 and (t in topics_text or t in title_text or t in body_text))
+            score += entity_matches * 4.0
+
+            scores[gid] = score
+
+        # Normalize BM25 scores to 0.0 - 1.0
+        max_score = max(scores.values(), default=1.0)
+        if max_score > 0:
+            return {gid: round(s / max_score, 4) for gid, s in scores.items()}
+        return scores
+
+    def retrieve_hybrid_passages(self, entity: str, claim_text: str, k: int = 5) -> list[EvidencePassage]:
+        """
+        Ranked hybrid retrieval combining BM25 keyword matching and ChromaDB vector search.
+        Evaluates relevance threshold and marks passages used_in_decision vs discarded.
         """
         query_text = f"{entity} {claim_text}".strip()
-        snippets: list[EvidenceSnippet] = []
-        entity_tokens = set(re.findall(r"\w+", entity.lower())) - {
-            "mg", "ml", "oral", "tablet", "solution", "daily", "the", "and", "for", "with", "cpt", "dose", "unit"
-        }
+        stop_words = {"mg", "ml", "oral", "tablet", "solution", "daily", "the", "and", "for", "with", "cpt", "dose", "unit"}
+        all_tokens = [t.lower() for t in re.findall(r"\w+", query_text) if len(t) >= 3 and t.lower() not in stop_words]
+        entity_tokens = set(re.findall(r"\w+", entity.lower())) - stop_words
 
-        # 1. Try vector store retrieval
+        # 1. Compute BM25 scores
+        bm25_scores = self._compute_bm25_scores(all_tokens, entity_tokens)
+
+        # 2. Compute ChromaDB vector distances
+        vector_scores: dict[str, float] = {}
         try:
             if not self._guidelines_indexed:
                 self.index_guidelines_in_vector_store()
@@ -147,133 +223,152 @@ class VerificationService:
                 )
                 if results and results.get("ids") and results["ids"][0]:
                     ids = results["ids"][0]
-                    docs = results.get("documents", [[]])[0]
-                    metas = results.get("metadatas", [[]])[0]
                     dists = results.get("distances", [[]])[0] if results.get("distances") else [0.5] * len(ids)
-
-                    for gid, doc, meta, dist in zip(ids, docs, metas, dists):
-                        matched_g = next((g for g in self.guidelines if g["guideline_id"] == gid), None)
-                        topics = [t.lower() for t in (matched_g.get("topics", []) if matched_g else [])]
-                        title = (meta.get("title", "") or "").lower()
-
-                        # Check if any significant entity token appears in guideline topics or title
-                        has_entity_anchor = any(t in topics or t in title for t in entity_tokens if len(t) >= 4)
-
-                        # Distance threshold check: if distance is high or entity has zero overlap, filter out
-                        if dist is not None and dist > 0.95 and not has_entity_anchor:
-                            continue
-
-                        # Convert distance to relevance score
-                        rel_score = max(0.0, min(1.0, 1.0 - (dist if dist is not None else 0.5)))
-                        if has_entity_anchor:
-                            rel_score = min(1.0, rel_score + 0.25)
-
-                        text_val = matched_g["text"] if matched_g else doc
-                        snippets.append(EvidenceSnippet(
-                            guideline_id=gid,
-                            title=meta.get("title", ""),
-                            source=meta.get("source", ""),
-                            text=text_val,
-                            relevance_score=round(rel_score, 3)
-                        ))
+                    for gid, dist in zip(ids, dists):
+                        sim = max(0.0, min(1.0, 1.0 - (dist if dist is not None else 0.5)))
+                        vector_scores[gid] = sim
         except Exception as e:
-            logger.debug(f"ChromaDB retrieval fallback to keyword matching: {e}")
+            logger.debug(f"ChromaDB query fallback: {e}")
 
-        # 2. If vector retrieval returned empty or failed, use keyword/lexical retrieval
-        if not snippets:
-            snippets = self._lexical_retrieval(entity, claim_text, k=k)
-
-        # Sort snippets by relevance score descending
-        snippets.sort(key=lambda s: s.relevance_score or 0.0, reverse=True)
-        return snippets[:k]
-
-    def _lexical_retrieval(self, entity: str, claim_text: str, k: int = 3) -> list[EvidenceSnippet]:
-        """Lexical matching over guidelines with strong entity anchoring."""
-        entity_tokens = set(re.findall(r"\w+", entity.lower())) - {
-            "mg", "ml", "oral", "tablet", "solution", "daily", "the", "and", "for", "with", "cpt", "dose", "unit"
-        }
-        claim_tokens = set(re.findall(r"\w+", claim_text.lower()))
-        scored: list[tuple[float, dict[str, Any]]] = []
-
+        # 3. Assemble hybrid passages
+        passages: list[EvidencePassage] = []
         for g in self.guidelines:
-            score = 0.0
-            topics = [t.lower() for t in g.get("topics", [])]
-            title = g.get("title", "").lower()
-            text = g.get("text", "").lower()
+            gid = g["guideline_id"]
+            bm25 = bm25_scores.get(gid, 0.0)
+            vec = vector_scores.get(gid, 0.0)
 
-            # Require at least some entity token overlap for meaningful clinical match
-            entity_matches = sum(1 for t in entity_tokens if len(t) >= 4 and (t in topics or t in title or t in text))
-            if not entity_matches and entity_tokens:
-                continue
+            # Check if vector search was active for this doc
+            if gid in vector_scores:
+                composite = round(0.55 * bm25 + 0.45 * vec, 3)
+            else:
+                composite = round(bm25, 3)
 
-            score += entity_matches * 5.0
+            # Entity anchor check
+            topics_text = " ".join(g.get("topics", [])).lower()
+            title_text = g["title"].lower()
+            has_entity_match = any(t in topics_text or t in title_text for t in entity_tokens if len(t) >= 4)
 
-            for token in claim_tokens:
-                if len(token) <= 3:
-                    continue
-                if token in topics:
-                    score += 2.0
-                if token in title:
-                    score += 1.5
+            # Threshold and discard logic
+            if composite < self.relevance_threshold:
+                used = False
+                discard_reason = f"Below relevance threshold {self.relevance_threshold:.2f} (score: {composite:.2f})"
+            elif entity_tokens and not has_entity_match and composite < 0.60:
+                used = False
+                discard_reason = "Entity mismatch: zero matching clinical topics in guideline"
+            else:
+                used = True
+                discard_reason = None
 
-            if score >= 3.0:
-                scored.append((score, g))
-
-        scored.sort(key=lambda x: x[0], reverse=True)
-        top = scored[:k]
-
-        snippets = []
-        max_score = top[0][0] if top else 1.0
-        for s, g in top:
-            norm_score = round(min(1.0, s / max(max_score, 10.0)), 3)
-            snippets.append(EvidenceSnippet(
-                guideline_id=g["guideline_id"],
+            passages.append(EvidencePassage(
+                passage_id=f"pas_{uuid.uuid4().hex[:10]}",
+                guideline_id=gid,
                 title=g["title"],
                 source=g["source"],
                 text=g["text"],
-                relevance_score=norm_score
+                relevance_score=composite,
+                used_in_decision=used,
+                discard_reason=discard_reason
             ))
-        return snippets
+
+        # Rank by relevance score descending
+        passages.sort(key=lambda p: p.relevance_score, reverse=True)
+        top_passages = passages[:k]
+
+        used_cnt = sum(1 for p in top_passages if p.used_in_decision)
+        disc_cnt = len(top_passages) - used_cnt
+        logger.info(f"Hybrid retrieval for '{entity}': {used_cnt} passages usable, {disc_cnt} discarded (threshold: {self.relevance_threshold:.2f})")
+
+        return top_passages
+
+    def retrieve_evidence_passages(self, entity: str, claim_text: str, k: int = 3) -> list[EvidenceSnippet]:
+        """Backward-compatible method returning EvidenceSnippet list."""
+        passages = self.retrieve_hybrid_passages(entity, claim_text, k=k)
+        return [
+            EvidenceSnippet(
+                guideline_id=p.guideline_id or "UNKNOWN",
+                title=p.title,
+                source=p.source,
+                text=p.text,
+                relevance_score=p.relevance_score
+            )
+            for p in passages if p.used_in_decision
+        ]
 
     async def verify_claim(self, claim: Claim) -> VerificationResult:
         """
         Verify an extracted Claim against local guidelines and price benchmarks.
-        Returns a VerificationResult including support score, verdict, and action.
+        Executes hybrid retrieval, evaluates deterministic abstention gates,
+        calls local Ollama LLM, and records complete decision audit trail.
         """
         entity = claim.extracted_fields.entity
         outcome = claim.extracted_fields.effect_or_outcome or "None reported"
 
-        # 1. Retrieve evidence snippets from local knowledge base
-        snippets = self.retrieve_evidence_passages(entity, claim.original_text, k=3)
+        # 1. Retrieve hybrid evidence passages (with scores and discard reasons)
+        passages = self.retrieve_hybrid_passages(entity, claim.original_text, k=5)
+        usable_passages = [p for p in passages if p.used_in_decision]
+
+        # Map to backwards-compatible snippets
+        snippets = [
+            EvidenceSnippet(
+                guideline_id=p.guideline_id or "UNKNOWN",
+                title=p.title,
+                source=p.source,
+                text=p.text,
+                relevance_score=p.relevance_score
+            )
+            for p in usable_passages
+        ]
 
         # 2. Evaluate cost anomaly
         anomaly_details = cost_anomaly_service.evaluate_claim_cost(claim)
         has_cost_anomaly = anomaly_details.is_anomaly
 
-        # 3. Check for lack of evidence -> ABSTAIN path
-        max_relevance = max((s.relevance_score or 0.0) for s in snippets) if snippets else 0.0
-        if not snippets or max_relevance < 0.40:
-            logger.info(f"Claim {claim.claim_id}: Insufficient evidence in local knowledge base (max_rel={max_relevance:.2f}). Abstaining.")
-            return VerificationResult(
+        # 3. Pre-evaluation Abstention Check (before querying LLM)
+        pre_abstention = abstention_service.evaluate(
+            claim=claim,
+            passages=passages,
+            cost_details=anomaly_details
+        )
+
+        if pre_abstention.should_abstain:
+            logger.info(f"Claim {claim.claim_id}: Abstention triggered before LLM execution [{pre_abstention.rule_triggered.value}]: {pre_abstention.reason}")
+            verification = VerificationResult(
                 claim_id=claim.claim_id,
                 support_score=0.0,
                 verdict=VerificationVerdict.INSUFFICIENT_EVIDENCE,
                 action=VerificationAction.ABSTAIN,
                 reasoning=(
-                    f"No authoritative clinical guidelines or documented evidence found in the local knowledge base "
-                    f"matching medical entity '{entity}'. Verification judgment is abstained to prevent hallucinations."
+                    f"System abstained from judgment: {pre_abstention.reason}"
                 ),
                 evidence_snippets=snippets,
+                passages_considered=passages,
                 cost_anomaly_flag=has_cost_anomaly,
                 anomaly_details=anomaly_details,
-                abstain_reason=f"Zero matching clinical evidence in local knowledge base for entity '{entity}'.",
+                abstain_reason=pre_abstention.reason,
                 verified_at=datetime.now(timezone.utc)
             )
 
-        # 4. Formulate prompt for local Ollama LLM
+            # Record full audit trail
+            audit_trail = audit_service.record_full_audit(
+                claim=claim,
+                verification=verification,
+                passages=passages,
+                cost_details=anomaly_details,
+                abstention_decision=pre_abstention
+            )
+            verification.audit_trail_id = audit_trail.audit_id
+
+            try:
+                await audit_service.save_audit_trail(audit_trail)
+            except Exception as e:
+                logger.warning(f"Failed to persist audit trail: {e}")
+
+            return verification
+
+        # 4. Formulate prompt for local Ollama LLM using usable passages
         passages_text = "\n\n".join(
             f"[{idx}] Guideline: {s.title} ({s.source})\nText: {s.text}"
-            for idx, s in enumerate(snippets, start=1)
+            for idx, s in enumerate(usable_passages, start=1)
         )
 
         user_prompt = (
@@ -293,7 +388,7 @@ class VerificationService:
             "format": "json",
             "stream": False,
             "options": {
-                "temperature": 0.0,  # Deterministic verification
+                "temperature": 0.0,
                 "top_p": 0.9,
             }
         }
@@ -316,21 +411,54 @@ class VerificationService:
         # 6. Parse model response
         verdict, support_score, reasoning = self._parse_verification_output(raw_response)
 
-        # 7. Determine final action (accept, flag, abstain)
-        action, abstain_reason = self._determine_action(verdict, support_score, has_cost_anomaly)
+        # 7. Post-evaluation Abstention Check (evaluating conflicting evidence or low confidence)
+        post_abstention = abstention_service.evaluate(
+            claim=claim,
+            passages=passages,
+            cost_details=anomaly_details,
+            model_verdict=verdict,
+            model_support_score=support_score,
+            model_reasoning=reasoning
+        )
 
-        return VerificationResult(
+        if post_abstention.should_abstain:
+            verdict = VerificationVerdict.INSUFFICIENT_EVIDENCE
+            action = VerificationAction.ABSTAIN
+            support_score = 0.0
+            abstain_reason = post_abstention.reason
+        else:
+            action, abstain_reason = self._determine_action(verdict, support_score, has_cost_anomaly)
+
+        verification = VerificationResult(
             claim_id=claim.claim_id,
             support_score=support_score,
             verdict=verdict,
             action=action,
             reasoning=reasoning,
             evidence_snippets=snippets,
+            passages_considered=passages,
             cost_anomaly_flag=has_cost_anomaly,
             anomaly_details=anomaly_details,
             abstain_reason=abstain_reason,
             verified_at=datetime.now(timezone.utc)
         )
+
+        # 8. Record and persist complete AuditTrail
+        audit_trail = audit_service.record_full_audit(
+            claim=claim,
+            verification=verification,
+            passages=passages,
+            cost_details=anomaly_details,
+            abstention_decision=post_abstention
+        )
+        verification.audit_trail_id = audit_trail.audit_id
+
+        try:
+            await audit_service.save_audit_trail(audit_trail)
+        except Exception as e:
+            logger.warning(f"Failed to persist audit trail: {e}")
+
+        return verification
 
     def _parse_verification_output(self, raw_text: str) -> tuple[VerificationVerdict, float, str]:
         """Parse structured verdict, support score, and reasoning from model JSON output."""
@@ -358,20 +486,17 @@ class VerificationService:
                 "Verification output was non-standard; assigned default partially supported verdict."
             )
 
-        # Sanitize verdict
         verdict_str = str(parsed.get("verdict") or "partially_supported").lower().strip()
         if verdict_str in [v.value for v in VerificationVerdict]:
             verdict = VerificationVerdict(verdict_str)
         else:
             verdict = VerificationVerdict.PARTIALLY_SUPPORTED
 
-        # Sanitize score
         score_val = parsed.get("support_score")
         try:
             score = float(score_val)
             score = max(0.0, min(1.0, round(score, 3)))
         except (TypeError, ValueError):
-            # Map default score based on verdict
             defaults = {
                 VerificationVerdict.SUPPORTED: 0.85,
                 VerificationVerdict.PARTIALLY_SUPPORTED: 0.55,
@@ -381,7 +506,6 @@ class VerificationService:
             score = defaults.get(verdict, 0.50)
 
         reasoning = str(parsed.get("reasoning") or "Evidence evaluated against clinical guidelines.").strip()
-
         return verdict, score, reasoning
 
     def _determine_action(
@@ -428,7 +552,6 @@ class VerificationService:
                 None
             )
 
-        # Fallback
         return (
             VerificationAction.FLAG,
             None
