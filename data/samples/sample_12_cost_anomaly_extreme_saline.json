@@ -1,0 +1,6 @@
+{
+  "id": "sample_12",
+  "source_type": "hospital_bill",
+  "source_url": "hospital://midwest-health-system/billing/inv-2026-saline-iv",
+  "text": "MIDWEST GENERAL HOSPITAL - CLEVELAND, OH. Inpatient Supply Itemized Statement. Line Item CPT/HCPCS J7030: 0.9% Sodium Chloride (Normal Saline) IV Solution, 1,000 mL infusion bag. Quantity Dispensed: 1 bag. Revenue Code: 0270 (Medical/Surgical Supplies). Unit Billed Charge: $720.00. Total Patient Responsibility: $720.00."
+}

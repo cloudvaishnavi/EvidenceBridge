@@ -8,7 +8,17 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.main import app
-from app.models.schemas import Claim, ExtractedFields, ProvenanceMetadata, SentimentType
+from app.models.schemas import (
+    Claim,
+    CostAnomalyDetails,
+    EvidenceSnippet,
+    ExtractedFields,
+    ProvenanceMetadata,
+    SentimentType,
+    VerificationAction,
+    VerificationResult,
+    VerificationVerdict,
+)
 
 
 @pytest.fixture
@@ -114,3 +124,171 @@ def test_extract_invalid_payload(client):
     response = client.post("/extract", json={"text": ""})
     # FastAPI/Pydantic returns 422 for min_length validation failure
     assert response.status_code == 422
+
+
+# ==============================================================================
+# Layer 2: Verification Endpoint Tests
+# ==============================================================================
+
+@patch("app.api.routes.storage_service.get_claim")
+@patch("app.api.routes.verification_service.verify_claim")
+@patch("app.api.routes.storage_service.insert_verification")
+def test_verify_claim_by_id_success(mock_insert_verif, mock_verify, mock_get_claim, client, sample_extracted_fields):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    mock_claim = Claim(
+        claim_id="clm_audit_test",
+        original_text="Metformin note sample",
+        source_type="clinical_note",
+        timestamp=now,
+        extracted_fields=sample_extracted_fields,
+        confidence=0.90,
+        provenance=ProvenanceMetadata(
+            source_hash="dummyhash",
+            original_snippet="Metformin note sample",
+            text_length=21,
+            source_type="clinical_note",
+            ingested_at=now,
+        ),
+    )
+    mock_get_claim.return_value = mock_claim
+
+    mock_verif_result = VerificationResult(
+        claim_id="clm_audit_test",
+        support_score=0.95,
+        verdict=VerificationVerdict.SUPPORTED,
+        action=VerificationAction.ACCEPT,
+        reasoning="ADA guideline strongly supports Metformin 1000mg for T2D HbA1c reduction.",
+        evidence_snippets=[
+            EvidenceSnippet(
+                guideline_id="GUIDE-DIAB-001",
+                title="ADA Standards of Care: Metformin in Type 2 Diabetes",
+                source="ADA Clinical Guidelines",
+                text="Metformin is first-line therapy...",
+                relevance_score=0.95
+            )
+        ],
+        cost_anomaly_flag=False,
+        anomaly_details=None,
+        abstain_reason=None,
+        verified_at=now
+    )
+    mock_verify.return_value = mock_verif_result
+    mock_insert_verif.return_value = mock_verif_result
+
+    response = client.post("/verify/clm_audit_test")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["success"] is True
+    assert data["verification"]["claim_id"] == "clm_audit_test"
+    assert data["verification"]["verdict"] == "supported"
+    assert data["verification"]["action"] == "accept"
+    assert data["verification"]["support_score"] == 0.95
+
+
+@patch("app.api.routes.storage_service.get_claim")
+def test_verify_claim_by_id_not_found(mock_get_claim, client):
+    mock_get_claim.return_value = None
+    response = client.post("/verify/clm_nonexistent")
+    assert response.status_code == 404
+    assert "not found" in response.json()["detail"]
+
+
+@patch("app.api.routes.extraction_service.extract_structured_claim")
+@patch("app.api.routes.storage_service.insert_claim")
+@patch("app.api.routes.vector_store_service.add_claim")
+@patch("app.api.routes.verification_service.verify_claim")
+@patch("app.api.routes.storage_service.insert_verification")
+def test_extract_and_verify_pipeline(
+    mock_insert_verif, mock_verify, mock_add_vector, mock_insert_claim, mock_extract, client
+):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    mock_extract.return_value = (
+        ExtractedFields(
+            entity="0.9% Sodium Chloride Normal Saline 1,000 mL IV",
+            effect_or_outcome="Hydration maintenance",
+            cost_range="$720.00",
+            location_city="Cleveland, OH",
+            sentiment=SentimentType.NEGATIVE,
+            reasoning="Severe saline markup detected.",
+        ),
+        0.94,
+    )
+    mock_insert_claim.return_value = None
+    mock_add_vector.return_value = True
+
+    mock_verif = VerificationResult(
+        claim_id="clm_saline_test",
+        support_score=0.88,
+        verdict=VerificationVerdict.SUPPORTED,
+        action=VerificationAction.FLAG,  # Flagged because of extreme cost anomaly
+        reasoning="Saline is indicated, but cost is an extreme 16x markup anomaly.",
+        evidence_snippets=[],
+        cost_anomaly_flag=True,
+        anomaly_details=CostAnomalyDetails(
+            is_anomaly=True,
+            extracted_amount=720.0,
+            benchmark_min=5.0,
+            benchmark_max=45.0,
+            multiplier=16.0,
+            threshold_multiplier=3.0,
+            severity="extreme",
+            explanation="Billed amount of $720.00 is 16.0x higher than benchmark max of $45.00"
+        ),
+        abstain_reason=None,
+        verified_at=now
+    )
+    mock_verify.return_value = mock_verif
+    mock_insert_verif.return_value = mock_verif
+
+    payload = {
+        "text": "MIDWEST HOSPITAL: Normal Saline 1000mL IV bag billed at $720.00 in Cleveland OH",
+        "source_type": "hospital_bill",
+        "store_claim": True
+    }
+
+    response = client.post("/extract-and-verify", json=payload)
+    assert response.status_code == 201
+    data = response.json()
+    assert data["success"] is True
+    assert data["claim"]["extracted_fields"]["entity"] == "0.9% Sodium Chloride Normal Saline 1,000 mL IV"
+    assert data["verification"]["cost_anomaly_flag"] is True
+    assert data["verification"]["action"] == "flag"
+    assert data["verification"]["anomaly_details"]["severity"] == "extreme"
+
+
+@patch("app.api.routes.storage_service.get_verification")
+def test_get_verification_by_id_found(mock_get_verif, client):
+    from datetime import datetime, timezone
+    now = datetime.now(timezone.utc)
+
+    mock_get_verif.return_value = VerificationResult(
+        claim_id="clm_test_verified",
+        support_score=0.91,
+        verdict=VerificationVerdict.SUPPORTED,
+        action=VerificationAction.ACCEPT,
+        reasoning="Audit complete and passed.",
+        evidence_snippets=[],
+        cost_anomaly_flag=False,
+        anomaly_details=None,
+        abstain_reason=None,
+        verified_at=now
+    )
+
+    response = client.get("/verification/clm_test_verified")
+    assert response.status_code == 200
+    data = response.json()
+    assert data["claim_id"] == "clm_test_verified"
+    assert data["verdict"] == "supported"
+
+
+@patch("app.api.routes.storage_service.get_verification")
+def test_get_verification_by_id_not_found(mock_get_verif, client):
+    mock_get_verif.return_value = None
+    response = client.get("/verification/clm_nonexistent")
+    assert response.status_code == 404
+    assert "no verification record found" in response.json()["detail"].lower()
+

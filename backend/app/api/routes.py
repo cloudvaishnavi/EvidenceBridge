@@ -1,6 +1,7 @@
 """
-API Routes for EvidenceBridge Foundational Layer.
-Endpoints for structured extraction, provenance tracking, claim retrieval, and system health.
+API Routes for EvidenceBridge.
+Endpoints for structured extraction, provenance tracking, claim retrieval,
+claim verification, cost anomaly detection, and system health.
 """
 
 from typing import Optional
@@ -10,9 +11,12 @@ from app.config import get_settings
 from app.models.schemas import (
     Claim,
     ClaimListResponse,
+    ExtractAndVerifyResponse,
     ExtractionRequest,
     ExtractionResponse,
     HealthResponse,
+    VerificationResponse,
+    VerificationResult,
 )
 from app.services.extraction import (
     ExtractionError,
@@ -22,6 +26,7 @@ from app.services.extraction import (
 from app.services.provenance import ProvenanceService
 from app.services.storage import StorageError, storage_service
 from app.services.vector_store import vector_store_service
+from app.services.verification import verification_service
 from app.utils.logger import logger
 
 router = APIRouter()
@@ -116,7 +121,6 @@ async def extract_claim(request: ExtractionRequest) -> ExtractionResponse:
         except StorageError as e:
             logger.warning(f"Could not persist claim to MongoDB: {e}")
             stored = False
-            # Still return extracted claim with provenance even if database is offline
 
     return ExtractionResponse(
         success=True,
@@ -179,3 +183,169 @@ async def list_claims(
             status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
             detail=f"Database storage service error: {e}"
         )
+
+
+# ==============================================================================
+# Layer 2: Claim Verification & Cost Anomaly Endpoints
+# ==============================================================================
+
+@router.post(
+    "/verify/{claim_id}",
+    response_model=VerificationResponse,
+    summary="Verify existing claim by ID",
+    description="Audits an existing claim against local clinical guidelines and pricing benchmarks using local Ollama model. Produces support score, verdict, action decision, and cost anomaly flags."
+)
+async def verify_claim_by_id(claim_id: str) -> VerificationResponse:
+    """Verify an existing stored claim by its unique ID."""
+    # 1. Fetch claim from database
+    try:
+        claim = await storage_service.get_claim(claim_id)
+    except StorageError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Storage error fetching claim: {e}"
+        )
+
+    if not claim:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Claim with ID '{claim_id}' not found for verification."
+        )
+
+    # 2. Run verification pipeline
+    try:
+        verification = await verification_service.verify_claim(claim)
+    except OllamaConnectionError as e:
+        logger.error(f"Ollama connection error during verification: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "Ollama LLM is unreachable for verification",
+                "message": str(e),
+                "resolution": f"Ensure Ollama is running at {settings.OLLAMA_BASE_URL}."
+            }
+        )
+    except ExtractionError as e:
+        logger.error(f"Verification error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Verification model error: {e}"
+        )
+
+    # 3. Save verification result linked to claim_id
+    try:
+        await storage_service.insert_verification(verification)
+    except StorageError as e:
+        logger.warning(f"Could not persist verification result to MongoDB: {e}")
+
+    return VerificationResponse(
+        success=True,
+        verification=verification,
+        message=f"Claim '{claim_id}' verified. Verdict: {verification.verdict.value}, Action: {verification.action.value}."
+    )
+
+
+@router.post(
+    "/extract-and-verify",
+    response_model=ExtractAndVerifyResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Extract claim and verify in one step",
+    description="Submits raw text, runs extraction, binds provenance, and immediately runs clinical evidence verification and cost anomaly checks."
+)
+async def extract_and_verify(request: ExtractionRequest) -> ExtractAndVerifyResponse:
+    """Extract structured claim and immediately audit it against knowledge base."""
+    raw_text = request.text.strip()
+    if not raw_text:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Input text cannot be empty."
+        )
+
+    # 1. Extract claim
+    try:
+        extracted_fields, confidence = await extraction_service.extract_structured_claim(raw_text)
+    except OllamaConnectionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail={
+                "error": "Ollama LLM is unreachable",
+                "message": str(e),
+                "resolution": f"Ensure Ollama is running at {settings.OLLAMA_BASE_URL}."
+            }
+        )
+    except ExtractionError as e:
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Extraction model error: {e}"
+        )
+
+    # 2. Assemble claim with tamper-evident provenance
+    claim = ProvenanceService.assemble_claim(
+        original_text=raw_text,
+        extracted_fields=extracted_fields,
+        confidence=confidence,
+        source_type=request.source_type,
+        source_url=request.source_url,
+        source_timestamp=request.source_timestamp,
+    )
+
+    # 3. Store claim
+    stored = False
+    if request.store_claim:
+        try:
+            await storage_service.insert_claim(claim)
+            stored = True
+            indexed = vector_store_service.add_claim(claim)
+            claim.indexed_vector = indexed
+        except StorageError as e:
+            logger.warning(f"Could not persist claim to MongoDB: {e}")
+
+    # 4. Run verification and cost anomaly audit
+    try:
+        verification = await verification_service.verify_claim(claim)
+    except Exception as e:
+        logger.error(f"Verification stage failed: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_502_BAD_GATEWAY,
+            detail=f"Verification failed: {e}"
+        )
+
+    # 5. Store verification result
+    if request.store_claim:
+        try:
+            await storage_service.insert_verification(verification)
+        except StorageError as e:
+            logger.warning(f"Could not persist verification result: {e}")
+
+    return ExtractAndVerifyResponse(
+        success=True,
+        claim=claim,
+        verification=verification,
+        stored=stored,
+        message=f"Claim extracted and verified. Verdict: {verification.verdict.value}, Action: {verification.action.value}."
+    )
+
+
+@router.get(
+    "/verification/{claim_id}",
+    response_model=VerificationResult,
+    summary="Get verification result by claim ID",
+    description="Retrieve the audit outcome, support score, evidence snippets, and cost anomaly details for a specific claim ID."
+)
+async def get_verification(claim_id: str) -> VerificationResult:
+    """Retrieve existing verification result by claim ID."""
+    try:
+        verification = await storage_service.get_verification(claim_id)
+    except StorageError as e:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail=f"Database storage error: {e}"
+        )
+
+    if not verification:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No verification record found for claim ID '{claim_id}'. Run POST /verify/{claim_id} first."
+        )
+
+    return verification

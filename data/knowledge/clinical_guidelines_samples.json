@@ -1,0 +1,86 @@
+[
+  {
+    "guideline_id": "GUIDE-DIAB-001",
+    "title": "ADA Standards of Care: Metformin in Type 2 Diabetes Mellitus",
+    "source": "American Diabetes Association (ADA) Clinical Guidelines",
+    "topics": ["metformin", "type 2 diabetes", "t2d", "hba1c", "glucose"],
+    "text": "Metformin is recommended as foundational first-line pharmacologic therapy for adults with type 2 diabetes unless contraindicated. Initiated typically at 500 mg once or twice daily and titrated up to 1,000 mg twice daily with meals. Expected clinical response includes an average HbA1c reduction of 1.0% to 1.5%. Metformin possesses negligible risk of hypoglycemia when used as monotherapy. Common adverse reactions are transient gastrointestinal disturbances (mild nausea, abdominal discomfort, diarrhea), which diminish with mealtime dosing and gradual titration."
+  },
+  {
+    "guideline_id": "GUIDE-HTN-002",
+    "title": "ACC/AHA Guideline for Prevention, Detection, and Management of High Blood Pressure",
+    "source": "American College of Cardiology / American Heart Association",
+    "topics": ["lisinopril", "ace inhibitor", "hypertension", "blood pressure", "systolic"],
+    "text": "First-line pharmacotherapy for Stage 1 and Stage 2 essential hypertension includes ACE inhibitors (such as Lisinopril 10 to 40 mg daily), ARBs, CCBs, or thiazide diuretics. Target seated blood pressure is <130/80 mmHg. Lisinopril consistently lowers systolic and diastolic pressure within 2 to 4 weeks. Clinicians must monitor baseline serum potassium and creatinine. Common side effects include dry persistent cough (occurring in 5-10% of patients) and mild dizziness; acute hyperkalemia or angioedema warrant immediate drug cessation."
+  },
+  {
+    "guideline_id": "GUIDE-GLP1-003",
+    "title": "ADA & FDA Guidance: Semaglutide for Type 2 Diabetes and Chronic Weight Management",
+    "source": "ADA / FDA Drug Safety Communication",
+    "topics": ["semaglutide", "ozempic", "wegovy", "weight loss", "glp-1", "nausea"],
+    "text": "Semaglutide is a once-weekly glucagon-like peptide-1 (GLP-1) receptor agonist indicated as an adjunct to diet and exercise to improve glycemic control in type 2 diabetes (0.5 mg to 2.0 mg) and for chronic weight management. Clinical trials establish robust weight reduction (average 10-15% of baseline body weight) and significant fasting blood glucose normalization. The most frequently observed adverse events are dose-dependent gastrointestinal effects, predominantly nausea, vomiting, diarrhea, dyspepsia, and acid reflux, occurring in up to 30-45% of patients during titration."
+  },
+  {
+    "guideline_id": "GUIDE-PNEUM-004",
+    "title": "ATS/IDSA Consensus Guidelines on Community-Acquired Pneumonia (CAP)",
+    "source": "American Thoracic Society / Infectious Diseases Society of America",
+    "topics": ["ceftriaxone", "pneumonia", "community-acquired pneumonia", "antibiotics", "inpatient"],
+    "text": "For hospitalized adult patients with non-severe community-acquired pneumonia (CAP), standard empiric regimen recommends a beta-lactam (Ceftriaxone 1g to 2g IV daily) combined with a macrolide or respiratory fluoroquinolone. Clinical stability (resolution of fever, stabilization of heart rate and leukocytosis) is expected within 48 to 72 hours of appropriate antimicrobial initiation. Transition to oral therapy (e.g., Cefdinir, Amoxicillin-Clavulanate) is indicated once hemodynamically stable and tolerating oral intake."
+  },
+  {
+    "guideline_id": "GUIDE-MIGR-005",
+    "title": "AHS Position Statement: OnabotulinumtoxinA (Botox) in Chronic Migraine",
+    "source": "American Headache Society (AHS) Guidelines",
+    "topics": ["botox", "onabotulinumtoxina", "chronic migraine", "headache", "neurology"],
+    "text": "OnabotulinumtoxinA (Botox) is FDA-approved and strongly recommended for the preventive treatment of adult patients with chronic migraine (defined as headache occurring on 15 or more days per month, with at least 8 days meeting migraine criteria). The standard PREEMPT protocol consists of 155 units administered across 31 specified craniofacial and cervical injection sites every 12 weeks. Clinical trials demonstrate a significant reduction of 8 to 11 headache days per month compared to baseline after 2 to 3 treatment cycles."
+  },
+  {
+    "guideline_id": "GUIDE-ORTHO-006",
+    "title": "AAOS Clinical Practice Guideline: Management of Meniscal Tears & Knee Arthroscopy",
+    "source": "American Academy of Orthopaedic Surgeons (AAOS)",
+    "topics": ["knee arthroscopy", "meniscus tear", "meniscectomy", "knee surgery", "cpt 29881"],
+    "text": "Arthroscopic partial meniscectomy is an established outpatient procedure for symptomatic, mechanical meniscal tears refractory to conservative management (such as physical therapy and NSAIDs). Typical postoperative course involves immediate weight-bearing as tolerated or protected crutch ambulation for 3 to 10 days, followed by structured physical therapy. Complications are rare (<1.5%), with full return to daily activities expected within 4 to 8 weeks in uncomplicated cases."
+  },
+  {
+    "guideline_id": "GUIDE-IMAG-007",
+    "title": "ACR Appropriateness Criteria: Knee MRI for Suspected Internal Derangement",
+    "source": "American College of Radiology (ACR)",
+    "topics": ["mri knee", "cpt 73721", "imaging", "joint pain", "magnetic resonance imaging"],
+    "text": "Magnetic Resonance Imaging (MRI) of the knee without contrast (CPT 73721) is the diagnostic imaging modality of choice for evaluation of suspected meniscal, cruciate ligament, or articular cartilage injury in symptomatic patients. Routine use of intravenous gadolinium contrast is not indicated for uncomplicated knee trauma or mechanical pain. Standard outpatient facilities perform this scan in 25-45 minutes."
+  },
+  {
+    "guideline_id": "GUIDE-EMER-008",
+    "title": "ACEP / CMS Coding Guidelines: Level 5 Emergency Department Evaluation (CPT 99285)",
+    "source": "American College of Emergency Physicians & CMS Documentation Standards",
+    "topics": ["99285", "emergency room", "er visit", "level 5", "emergency department"],
+    "text": "CPT code 99285 corresponds to an emergency department visit involving a medical decision-making of high complexity for evaluation and management of an acute illness or severe injury that poses an immediate threat to life or physiological function (e.g., active chest pain with ischemia risk, acute altered mental status, severe respiratory distress). Documentation must reflect comprehensive immediate assessment, continuous monitoring, and high-intensity clinical interventions."
+  },
+  {
+    "guideline_id": "GUIDE-LAB-009",
+    "title": "CAP / CMS Standards: Comprehensive Metabolic Panel (CPT 80053)",
+    "source": "College of American Pathologists & CMS Clinical Laboratory Fee Schedule",
+    "topics": ["80053", "comprehensive metabolic panel", "cmp", "blood test", "laboratory"],
+    "text": "CPT 80053 defines a Comprehensive Metabolic Panel (CMP) consisting of 14 specific automated serum measurements: glucose, calcium, albumin, total protein, sodium, potassium, chloride, carbon dioxide (bicarbonate), blood urea nitrogen (BUN), creatinine, alkaline phosphatase (ALP), alanine aminotransferase (ALT), aspartate aminotransferase (AST), and total bilirubin. It is a standard automated diagnostic battery performed via high-throughput clinical chemistry analyzers."
+  },
+  {
+    "guideline_id": "GUIDE-PHARM-010",
+    "title": "USP & FDA Monograph: Acetaminophen Oral Dosage and Dosing Limits",
+    "source": "United States Pharmacopeia & FDA Over-the-Counter Review",
+    "topics": ["acetaminophen", "tylenol", "paracetamol", "analgesic", "antipyretic"],
+    "text": "Acetaminophen (APAP) 500 mg oral tablet is an antipyretic and mild-to-moderate analgesic indicated for fever and temporary relief of minor aches. Recommended adult dosing is 500 mg to 1,000 mg every 4 to 6 hours as needed, with a strict maximum daily dose of 4,000 mg (or 3,000 mg for chronic dosing/elderly) to avoid hepatic toxicity. Oral generic tablets have a nominal manufacturing cost and widespread generic availability."
+  },
+  {
+    "guideline_id": "GUIDE-RESP-011",
+    "title": "GOLD & CDC Guidelines: Antibiotic Ineffectiveness in Acute Uncomplicated Bronchitis",
+    "source": "CDC Core Elements of Hospital Antibiotic Stewardship / GOLD Guidelines",
+    "topics": ["bronchitis", "azithromycin", "antibiotics", "acute bronchitis", "cough"],
+    "text": "Routine antimicrobial therapy (including macrolides such as Azithromycin or penicillins) is explicitly NOT recommended for acute uncomplicated bronchitis in immunocompetent adults. More than 90% of acute bronchitis cases are viral in etiology (e.g., rhinovirus, influenza, coronavirus). Clinical trials have demonstrated that antibiotics do not significantly shorten illness duration or reduce cough severity compared to placebo, while introducing antibiotic resistance and adverse events (such as diarrhea, QT prolongation)."
+  },
+  {
+    "guideline_id": "GUIDE-INFUS-012",
+    "title": "USP & CDC Clinical Guidelines: 0.9% Sodium Chloride (Normal Saline) IV Solution",
+    "source": "United States Pharmacopeia & CDC Healthcare Guidelines",
+    "topics": ["normal saline", "sodium chloride", "iv fluid", "hydration", "intravenous"],
+    "text": "0.9% Sodium Chloride Injection (Normal Saline) 1,000 mL sterile intravenous infusion bag is an essential isotonic crystalloid fluid indicated for extracellular fluid replacement, rehydration, and maintenance of electrolyte balance. It is an elemental commodity solution in hospital and emergency care with minimal baseline production and wholesale distribution costs."
+  }
+]

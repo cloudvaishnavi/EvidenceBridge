@@ -1,0 +1,134 @@
+[
+  {
+    "entity": "Emergency Department Visit Level 5 (CPT 99285)",
+    "keywords": ["99285", "emergency department", "emergency room", "er visit", "level 5"],
+    "category": "emergency",
+    "typical_min": 450.00,
+    "typical_max": 1500.00,
+    "currency": "USD",
+    "unit": "per visit",
+    "source": "CMS Medicare Physician Fee Schedule & Fair Health Benchmark 2026",
+    "cpt_code": "99285"
+  },
+  {
+    "entity": "Acetaminophen 500 MG Oral Tablet",
+    "keywords": ["acetaminophen", "tylenol", "paracetamol", "oral tablet", "rx-0250"],
+    "category": "consumable",
+    "typical_min": 0.05,
+    "typical_max": 1.00,
+    "currency": "USD",
+    "unit": "per tablet",
+    "source": "National Average Drug Acquisition Cost (NADAC) & Healthcare Bluebook",
+    "cpt_code": null
+  },
+  {
+    "entity": "MRI Left Knee without contrast (CPT 73721)",
+    "keywords": ["mri", "knee mri", "73721", "magnetic resonance", "joint imaging"],
+    "category": "imaging",
+    "typical_min": 450.00,
+    "typical_max": 1200.00,
+    "currency": "USD",
+    "unit": "per scan",
+    "source": "CMS Outpatient Prospective Payment System (OPPS) & Fair Health Benchmark",
+    "cpt_code": "73721"
+  },
+  {
+    "entity": "Comprehensive Metabolic Panel (CPT 80053)",
+    "keywords": ["80053", "comprehensive metabolic panel", "cmp", "metabolic panel", "blood chemistry"],
+    "category": "laboratory",
+    "typical_min": 15.00,
+    "typical_max": 85.00,
+    "currency": "USD",
+    "unit": "per panel",
+    "source": "CMS Clinical Laboratory Fee Schedule (CLFS) 2026",
+    "cpt_code": "80053"
+  },
+  {
+    "entity": "Semaglutide 0.5mg / Ozempic",
+    "keywords": ["semaglutide", "ozempic", "wegovy", "glp-1"],
+    "category": "drug",
+    "typical_min": 850.00,
+    "typical_max": 1050.00,
+    "currency": "USD",
+    "unit": "per monthly pen",
+    "source": "GoodRx Commercial Retail Benchmark & RedBook Wholesale",
+    "cpt_code": null
+  },
+  {
+    "entity": "Metformin 1,000 mg",
+    "keywords": ["metformin", "glucophage"],
+    "category": "drug",
+    "typical_min": 4.00,
+    "typical_max": 25.00,
+    "currency": "USD",
+    "unit": "per 60 tablets (monthly supply)",
+    "source": "NADAC & Retail Generic Pricing Formulary",
+    "cpt_code": null
+  },
+  {
+    "entity": "Lisinopril 20 mg",
+    "keywords": ["lisinopril", "prinivil", "zestril"],
+    "category": "drug",
+    "typical_min": 4.00,
+    "typical_max": 20.00,
+    "currency": "USD",
+    "unit": "per 30 tablets (monthly supply)",
+    "source": "NADAC & Retail Generic Pricing Formulary",
+    "cpt_code": null
+  },
+  {
+    "entity": "Left Knee Arthroscopy / Meniscectomy",
+    "keywords": ["arthroscopy", "meniscus", "knee arthroscopy", "meniscectomy", "29881"],
+    "category": "procedure",
+    "typical_min": 2500.00,
+    "typical_max": 5500.00,
+    "currency": "USD",
+    "unit": "total outpatient surgery facility + professional fee",
+    "source": "Fair Health Outpatient Surgical Benchmark & CMS Ambulatory Surgical Center (ASC) Rates",
+    "cpt_code": "29881"
+  },
+  {
+    "entity": "OnabotulinumtoxinA (Botox) 155 units",
+    "keywords": ["botox", "onabotulinumtoxina", "migraine injection"],
+    "category": "drug",
+    "typical_min": 1200.00,
+    "typical_max": 1850.00,
+    "currency": "USD",
+    "unit": "per 155-200 unit protocol vial",
+    "source": "ASP (Average Sales Price) CMS Medicare Part B Pricing File",
+    "cpt_code": "J0585"
+  },
+  {
+    "entity": "Ceftriaxone 1g IV daily",
+    "keywords": ["ceftriaxone", "rocephin"],
+    "category": "drug",
+    "typical_min": 15.00,
+    "typical_max": 75.00,
+    "currency": "USD",
+    "unit": "per 1g IV daily dose inpatient pharmacy",
+    "source": "CMS Hospital Outpatient & Inpatient Pharmaceutical Benchmark",
+    "cpt_code": "J0696"
+  },
+  {
+    "entity": "0.9% Sodium Chloride (Normal Saline) 1,000 mL IV",
+    "keywords": ["normal saline", "sodium chloride", "iv bag", "0.9% nacl", "saline solution"],
+    "category": "consumable",
+    "typical_min": 5.00,
+    "typical_max": 45.00,
+    "currency": "USD",
+    "unit": "per 1,000 mL IV bag",
+    "source": "Healthcare Bluebook Hospital Supply Pricing Benchmark",
+    "cpt_code": "J7030"
+  },
+  {
+    "entity": "Azithromycin 250 mg (Z-Pak 6 tablets)",
+    "keywords": ["azithromycin", "z-pak", "zithromax"],
+    "category": "drug",
+    "typical_min": 8.00,
+    "typical_max": 30.00,
+    "currency": "USD",
+    "unit": "per 6-tablet pack",
+    "source": "NADAC & Retail Generic Pricing Formulary",
+    "cpt_code": null
+  }
+]

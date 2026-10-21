@@ -2,6 +2,10 @@
 from app.models.schemas import (
     Claim,
     ClaimListResponse,
+    CostAnomalyDetails,
+    CostBenchmark,
+    EvidenceSnippet,
+    ExtractAndVerifyResponse,
     ExtractedFields,
     ExtractionRequest,
     ExtractionResponse,
@@ -9,11 +13,19 @@ from app.models.schemas import (
     ProvenanceMetadata,
     SentimentType,
     SourceType,
+    VerificationAction,
+    VerificationResponse,
+    VerificationResult,
+    VerificationVerdict,
 )
 
 __all__ = [
     "Claim",
     "ClaimListResponse",
+    "CostAnomalyDetails",
+    "CostBenchmark",
+    "EvidenceSnippet",
+    "ExtractAndVerifyResponse",
     "ExtractedFields",
     "ExtractionRequest",
     "ExtractionResponse",
@@ -21,4 +33,8 @@ __all__ = [
     "ProvenanceMetadata",
     "SentimentType",
     "SourceType",
+    "VerificationAction",
+    "VerificationResponse",
+    "VerificationResult",
+    "VerificationVerdict",
 ]

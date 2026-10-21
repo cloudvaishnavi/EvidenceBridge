@@ -9,7 +9,7 @@ from motor.motor_asyncio import AsyncIOMotorClient, AsyncIOMotorCollection, Asyn
 from pymongo.errors import ConnectionFailure, DuplicateKeyError, ServerSelectionTimeoutError
 
 from app.config import get_settings
-from app.models.schemas import Claim
+from app.models.schemas import Claim, VerificationResult
 from app.utils.logger import logger
 
 
@@ -26,6 +26,7 @@ class StorageService:
         self._client: Optional[AsyncIOMotorClient] = client
         self._db: Optional[AsyncIOMotorDatabase] = None
         self._collection: Optional[AsyncIOMotorCollection] = None
+        self._verifications_collection: Optional[AsyncIOMotorCollection] = None
 
     async def connect(self) -> None:
         """Initialize connection pool to MongoDB and ensure indexes."""
@@ -37,6 +38,7 @@ class StorageService:
             )
         self._db = self._client[self.settings.MONGODB_DB_NAME]
         self._collection = self._db[self.settings.MONGODB_CLAIMS_COLLECTION]
+        self._verifications_collection = self._db[self.settings.MONGODB_VERIFICATIONS_COLLECTION]
 
         try:
             # Ping database to verify connection
@@ -53,20 +55,30 @@ class StorageService:
             self._client = None
             self._db = None
             self._collection = None
+            self._verifications_collection = None
             logger.info("MongoDB connection closed")
 
     async def _ensure_indexes(self) -> None:
         """Create indexes on claim_id, timestamp, and source_hash."""
-        if self._collection is None:
-            return
-        try:
-            await self._collection.create_index("claim_id", unique=True)
-            await self._collection.create_index("timestamp")
-            await self._collection.create_index("provenance.source_hash")
-            await self._collection.create_index("extracted_fields.entity")
-            logger.info("MongoDB indexes verified on collection 'claims'")
-        except Exception as e:
-            logger.warning(f"Failed to ensure MongoDB indexes: {e}")
+        if self._collection is not None:
+            try:
+                await self._collection.create_index("claim_id", unique=True)
+                await self._collection.create_index("timestamp")
+                await self._collection.create_index("provenance.source_hash")
+                await self._collection.create_index("extracted_fields.entity")
+                logger.info("MongoDB indexes verified on collection 'claims'")
+            except Exception as e:
+                logger.warning(f"Failed to ensure MongoDB indexes on claims: {e}")
+
+        if self._verifications_collection is not None:
+            try:
+                await self._verifications_collection.create_index("claim_id", unique=True)
+                await self._verifications_collection.create_index("verified_at")
+                await self._verifications_collection.create_index("verdict")
+                await self._verifications_collection.create_index("action")
+                logger.info("MongoDB indexes verified on collection 'verifications'")
+            except Exception as e:
+                logger.warning(f"Failed to ensure MongoDB indexes on verifications: {e}")
 
     async def check_health(self) -> dict[str, Any]:
         """Check MongoDB connection and return status."""
@@ -74,12 +86,14 @@ class StorageService:
             return {"status": "uninitialized", "error": "Client not connected"}
         try:
             await self._client.admin.command("ping")
-            count = await self.count_claims()
+            claims_cnt = await self.count_claims()
+            verifications_cnt = await self.count_verifications()
             return {
                 "status": "healthy",
                 "database": self.settings.MONGODB_DB_NAME,
                 "collection": self.settings.MONGODB_CLAIMS_COLLECTION,
-                "claims_count": count,
+                "claims_count": claims_cnt,
+                "verifications_count": verifications_cnt,
             }
         except Exception as e:
             return {"status": "unreachable", "error": str(e)}
@@ -90,6 +104,13 @@ class StorageService:
         if self._collection is None:
             raise StorageError("StorageService is not connected. Call connect() first.")
         return self._collection
+
+    @property
+    def verifications_collection(self) -> AsyncIOMotorCollection:
+        """Access the verifications collection."""
+        if self._verifications_collection is None:
+            raise StorageError("StorageService is not connected. Call connect() first.")
+        return self._verifications_collection
 
     async def insert_claim(self, claim: Claim) -> Claim:
         """
@@ -142,6 +163,43 @@ class StorageService:
             return await self.collection.count_documents({})
         except Exception as e:
             logger.warning(f"Failed to count claims: {e}")
+            return 0
+
+    async def insert_verification(self, verification: VerificationResult) -> VerificationResult:
+        """
+        Persist or update a verification result linked to claim_id in MongoDB.
+        Uses upsert on claim_id so re-verifications cleanly replace old audits.
+        """
+        doc = verification.model_dump(mode="python")
+        try:
+            await self.verifications_collection.update_one(
+                {"claim_id": verification.claim_id},
+                {"$set": doc},
+                upsert=True
+            )
+            logger.info(f"Saved verification for claim {verification.claim_id} (verdict={verification.verdict.value}, action={verification.action.value})")
+            return verification
+        except Exception as e:
+            logger.error(f"Failed to save verification for claim {verification.claim_id}: {e}")
+            raise StorageError(f"Database verification insertion failed: {e}") from e
+
+    async def get_verification(self, claim_id: str) -> Optional[VerificationResult]:
+        """Retrieve a verification result by claim_id."""
+        try:
+            doc = await self.verifications_collection.find_one({"claim_id": claim_id}, {"_id": 0})
+            if not doc:
+                return None
+            return VerificationResult.model_validate(doc)
+        except Exception as e:
+            logger.error(f"Failed to retrieve verification for claim {claim_id}: {e}")
+            raise StorageError(f"Database query failed: {e}") from e
+
+    async def count_verifications(self) -> int:
+        """Return total number of verification records in collection."""
+        try:
+            return await self.verifications_collection.count_documents({})
+        except Exception as e:
+            logger.warning(f"Failed to count verifications: {e}")
             return 0
 
 

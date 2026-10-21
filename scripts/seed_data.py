@@ -1,16 +1,15 @@
 """
-Seed Data Script for EvidenceBridge.
-Ingests sample clinical notes, hospital bills, and patient forum reports
-into the EvidenceBridge extraction and provenance engine.
+Seed Data Script for EvidenceBridge (Layer 2).
+Ingests and verifies sample clinical notes, hospital bills, and patient forum reports
+against local knowledge base guidelines and price benchmarks.
 
 Usage:
-    python scripts/seed_data.py [--url http://localhost:8000] [--file data/samples/samples.json]
+    python scripts/seed_data.py [--url http://localhost:8000] [--file data/samples/samples.json] [--verify]
 """
 
 import argparse
 import asyncio
 import json
-import os
 from pathlib import Path
 import sys
 from typing import Any
@@ -39,16 +38,18 @@ def load_samples(samples_path: Path) -> list[dict[str, Any]]:
     raise FileNotFoundError(f"Sample path not found: {samples_path}")
 
 
-async def ingest_via_api(api_base_url: str, samples: list[dict[str, Any]]) -> None:
-    """Send each sample to the running FastAPI /extract endpoint."""
-    extract_url = f"{api_base_url.rstrip('/')}/extract"
-    health_url = f"{api_base_url.rstrip('/')}/health"
+async def ingest_via_api(api_base_url: str, samples: list[dict[str, Any]], verify: bool = False) -> None:
+    """Send each sample to the running FastAPI backend."""
+    base = api_base_url.rstrip("/")
+    endpoint = f"{base}/extract-and-verify" if verify else f"{base}/extract"
+    health_url = f"{base}/health"
 
-    print("=" * 70)
-    print(" EvidenceBridge - Data Seeder")
-    print(f" Target Endpoint: {extract_url}")
-    print(f" Total Samples to Ingest: {len(samples)}")
-    print("=" * 70)
+    print("=" * 80)
+    print(" EvidenceBridge - Data Seeder & Claim Auditor")
+    print(f" Target Endpoint: {endpoint}")
+    print(f" Mode:            {'Extraction + Claim Verification + Cost Anomaly Audit' if verify else 'Extraction + Provenance Only'}")
+    print(f" Total Samples:   {len(samples)}")
+    print("=" * 80)
 
     # Check health first
     async with httpx.AsyncClient(timeout=10.0) as client:
@@ -57,10 +58,11 @@ async def ingest_via_api(api_base_url: str, samples: list[dict[str, Any]]) -> No
             print(f"[✓] Backend health check: HTTP {h_resp.status_code}")
             h_data = h_resp.json()
             services = h_data.get("services", {})
-            print(f"    - MongoDB: {services.get('mongodb', {}).get('status')}")
-            print(f"    - Ollama:  {services.get('ollama', {}).get('status')} (model: {services.get('ollama', {}).get('configured_model')})")
+            print(f"    - MongoDB:      {services.get('mongodb', {}).get('status')}")
+            print(f"    - Ollama:       {services.get('ollama', {}).get('status')} (model: {services.get('ollama', {}).get('configured_model')})")
+            print(f"    - Vector Store: {services.get('vector_store', {}).get('status')}")
         except Exception as e:
-            print(f"[!] Warning: Health check failed ({e}). Proceeding with extraction anyway...")
+            print(f"[!] Warning: Health check failed ({e}). Proceeding anyway...")
 
     success_count = 0
     fail_count = 0
@@ -81,22 +83,45 @@ async def ingest_via_api(api_base_url: str, samples: list[dict[str, Any]]) -> No
             }
 
             try:
-                resp = await client.post(extract_url, json=payload)
+                resp = await client.post(endpoint, json=payload)
                 if resp.status_code in (200, 201):
                     data = resp.json()
                     claim = data.get("claim", {})
                     fields = claim.get("extracted_fields", {})
                     prov = claim.get("provenance", {})
 
-                    print(f"    [✓] Extracted Claim ID: {claim.get('claim_id')}")
+                    print(f"    [✓] Claim ID:    {claim.get('claim_id')}")
                     print(f"        • Entity:     {fields.get('entity')}")
                     print(f"        • Outcome:    {fields.get('effect_or_outcome')}")
-                    print(f"        • Cost Range: {fields.get('cost_range') or 'None'}")
-                    print(f"        • Location:   {fields.get('location_city') or 'None'}")
+                    print(f"        • Cost:       {fields.get('cost_range') or 'None'}")
                     print(f"        • Sentiment:  {fields.get('sentiment')}")
                     print(f"        • Confidence: {claim.get('confidence')}")
-                    print(f"        • SHA-256:    {prov.get('source_hash', '')[:16]}...")
-                    print(f"        • Stored:     {data.get('stored')}")
+
+                    if verify and "verification" in data:
+                        verif = data["verification"]
+                        verdict = verif.get("verdict")
+                        action = verif.get("action")
+                        score = verif.get("support_score")
+                        is_anomaly = verif.get("cost_anomaly_flag")
+                        anomaly = verif.get("anomaly_details") or {}
+
+                        action_badge = {
+                            "accept": "[ACCEPT - VERIFIED]",
+                            "flag": "[FLAG - SUSPICIOUS/CONTRADICTED]",
+                            "abstain": "[ABSTAIN - INSUFFICIENT EVIDENCE]"
+                        }.get(action, f"[{action.upper()}]")
+
+                        print(f"        --------------------------------------------------------")
+                        print(f"        • Action:     {action_badge}")
+                        print(f"        • Verdict:    {verdict} (support score: {score})")
+                        print(f"        • Cost Flag:  {'⚠️ ANOMALY DETECTED' if is_anomaly else '✓ Normal / Unflagged'}")
+                        if is_anomaly:
+                            print(f"          Severity:   {anomaly.get('severity', '').upper()} ({anomaly.get('multiplier')}× max benchmark)")
+                            print(f"          Detail:     {anomaly.get('explanation')}")
+                        if verif.get("abstain_reason"):
+                            print(f"          Abstain:    {verif.get('abstain_reason')}")
+                        print(f"        • Audit:      {verif.get('reasoning')}")
+
                     success_count += 1
                 else:
                     print(f"    [✗] HTTP {resp.status_code}: {resp.text}")
@@ -105,9 +130,9 @@ async def ingest_via_api(api_base_url: str, samples: list[dict[str, Any]]) -> No
                 print(f"    [✗] Request failed: {e}")
                 fail_count += 1
 
-    print("\n" + "=" * 70)
-    print(f" Seeding Complete: {success_count} succeeded, {fail_count} failed.")
-    print("=" * 70)
+    print("\n" + "=" * 80)
+    print(f" Processing Complete: {success_count} succeeded, {fail_count} failed.")
+    print("=" * 80)
 
 
 def main():
@@ -122,6 +147,11 @@ def main():
         default=str(Path(__file__).parent.parent / "data" / "samples" / "samples.json"),
         help="Path to samples.json or directory with samples"
     )
+    parser.add_argument(
+        "--verify",
+        action="store_true",
+        help="Run claim verification and cost anomaly detection in addition to extraction"
+    )
 
     args = parser.parse_args()
     samples_path = Path(args.file)
@@ -131,7 +161,7 @@ def main():
         sys.exit(1)
 
     samples = load_samples(samples_path)
-    asyncio.run(ingest_via_api(args.url, samples))
+    asyncio.run(ingest_via_api(args.url, samples, verify=args.verify))
 
 
 if __name__ == "__main__":

@@ -25,6 +25,7 @@ class Settings(BaseSettings):
     MONGODB_URL: str = "mongodb://localhost:27017"
     MONGODB_DB_NAME: str = "evidencebridge"
     MONGODB_CLAIMS_COLLECTION: str = "claims"
+    MONGODB_VERIFICATIONS_COLLECTION: str = "verifications"
     MONGODB_TIMEOUT_MS: int = 4000
 
     # Ollama Local LLM Configuration
@@ -32,9 +33,14 @@ class Settings(BaseSettings):
     OLLAMA_MODEL: str = "phi3:mini"
     OLLAMA_TIMEOUT_SECONDS: float = 60.0
 
+    # Knowledge Base & Verification
+    KNOWLEDGE_BASE_DIR: str = "./data/knowledge"
+    COST_ANOMALY_THRESHOLD_MULTIPLIER: float = 3.0
+
     # Vector Store Configuration
     CHROMA_PERSIST_DIRECTORY: str = "./chroma_db"
     CHROMA_COLLECTION_NAME: str = "evidencebridge_claims"
+    CHROMA_GUIDELINES_COLLECTION: str = "evidencebridge_guidelines"
 
 
 @lru_cache()

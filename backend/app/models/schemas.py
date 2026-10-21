@@ -188,3 +188,102 @@ class HealthResponse(BaseModel):
     version: str
     timestamp: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     services: dict[str, Any]
+
+
+# ==============================================================================
+# Layer 2: Verification, Support Scoring & Cost Anomaly Schemas
+# ==============================================================================
+
+class VerificationVerdict(str, Enum):
+    """Verdict representing whether medical evidence supports or refutes a claim."""
+    SUPPORTED = "supported"
+    PARTIALLY_SUPPORTED = "partially_supported"
+    CONTRADICTED = "contradicted"
+    INSUFFICIENT_EVIDENCE = "insufficient_evidence"
+
+
+class VerificationAction(str, Enum):
+    """Decision action based on verification verdict and cost anomaly flag."""
+    ACCEPT = "accept"    # Supported claim, fair or expected pricing
+    FLAG = "flag"        # Contradicted, partially supported, or cost anomaly detected
+    ABSTAIN = "abstain"  # Insufficient or inconclusive evidence in knowledge base
+
+
+class CostBenchmark(BaseModel):
+    """Public pricing benchmark for a procedure, test, drug, or hospital service."""
+    model_config = ConfigDict(extra="ignore")
+
+    entity: str
+    keywords: list[str] = Field(default_factory=list)
+    category: Optional[str] = None
+    typical_min: float
+    typical_max: float
+    currency: str = "USD"
+    unit: Optional[str] = None
+    source: str
+    cpt_code: Optional[str] = None
+
+
+class CostAnomalyDetails(BaseModel):
+    """Details of cost anomaly evaluation against public benchmarks."""
+    model_config = ConfigDict(extra="ignore")
+
+    is_anomaly: bool = False
+    extracted_amount: Optional[float] = None
+    benchmark_min: Optional[float] = None
+    benchmark_max: Optional[float] = None
+    multiplier: Optional[float] = None
+    threshold_multiplier: float = 3.0
+    severity: str = "none"  # "none", "moderate", "severe", "extreme"
+    explanation: str
+
+
+class EvidenceSnippet(BaseModel):
+    """Clinical guideline passage retrieved from local knowledge base."""
+    model_config = ConfigDict(extra="ignore")
+
+    guideline_id: str
+    title: str
+    source: str
+    text: str
+    relevance_score: Optional[float] = None
+
+
+class VerificationResult(BaseModel):
+    """
+    Complete audit result for an extracted claim:
+    evidence-based support score, verdict, action decision, and cost anomaly flags.
+    """
+    model_config = ConfigDict(extra="ignore")
+
+    claim_id: str
+    support_score: float = Field(
+        ...,
+        ge=0.0,
+        le=1.0,
+        description="Numeric score (0.0 to 1.0) indicating strength of evidence support"
+    )
+    verdict: VerificationVerdict
+    action: VerificationAction
+    reasoning: str
+    evidence_snippets: list[EvidenceSnippet] = Field(default_factory=list)
+    cost_anomaly_flag: bool = False
+    anomaly_details: Optional[CostAnomalyDetails] = None
+    abstain_reason: Optional[str] = None
+    verified_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
+
+
+class VerificationResponse(BaseModel):
+    """Response returned by verification endpoint."""
+    success: bool = True
+    verification: VerificationResult
+    message: str = "Claim verification completed successfully"
+
+
+class ExtractAndVerifyResponse(BaseModel):
+    """Combined response for extraction and verification pipeline."""
+    success: bool = True
+    claim: Claim
+    verification: VerificationResult
+    stored: bool
+    message: str = "Claim extracted, verified, and linked with provenance"
