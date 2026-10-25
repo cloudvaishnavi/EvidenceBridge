@@ -15,6 +15,7 @@ export default function Claims() {
   // Filter state
   const [actionFilter, setActionFilter] = useState<'all' | 'accept' | 'flag' | 'abstain'>('all')
   const [anomalyOnly, setAnomalyOnly] = useState(false)
+  const [searchQuery, setSearchQuery] = useState('')
   const [locationQuery, setLocationQuery] = useState('')
 
   const loadClaims = async (currentSkip: number, locFilter?: string) => {
@@ -59,7 +60,7 @@ export default function Claims() {
     loadClaims(0, locationQuery)
   }
 
-  // Client-side filtering for action and cost anomaly
+  // Client-side filtering for action, anomaly, and free text search
   const filteredClaims = claims.filter((c) => {
     const v = verifications[c.claim_id]
 
@@ -75,70 +76,125 @@ export default function Claims() {
       }
     }
 
+    if (searchQuery.trim()) {
+      const q = searchQuery.trim().toLowerCase()
+      const entity = (c.extracted_fields?.entity || '').toLowerCase()
+      const text = c.original_text.toLowerCase()
+      const outcome = (c.extracted_fields?.effect_or_outcome || '').toLowerCase()
+      if (!entity.includes(q) && !text.includes(q) && !outcome.includes(q)) {
+        return false
+      }
+    }
+
     return true
   })
 
   return (
-    <div className="space-y-6">
-      {/* Header and Filter Controls */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+    <div className="space-y-6 max-w-5xl mx-auto">
+      {/* Page Header */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 sm:p-7 shadow-card">
         <div className="flex flex-col md:flex-row justify-between md:items-center gap-4 mb-6">
           <div>
-            <h1 className="text-2xl font-bold text-slate-900">Healthcare Claims Explorer</h1>
-            <p className="text-xs text-slate-500 mt-1">
-              Browse, filter, and inspect stored claims with full cryptographic provenance
+            <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-800 text-[11px] font-bold uppercase tracking-wider mb-1.5 border border-sky-200">
+              Audit Database
+            </div>
+            <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+              Hospital Claims Explorer
+            </h1>
+            <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-xl">
+              Inspect all audited medical bills, clinical chart records, and price anomaly flags with complete cryptographic provenance.
             </p>
           </div>
 
-          <span className="text-xs font-semibold px-3 py-1.5 rounded-lg bg-slate-100 text-slate-700 w-fit">
-            {total} Total Claim{total === 1 ? '' : 's'} Tracked
-          </span>
+          <div className="text-right sm:self-start bg-slate-50 px-4 py-3 rounded-xl border border-slate-200">
+            <span className="text-[10px] uppercase font-bold text-slate-400 block">Total Ingested</span>
+            <span className="text-xl font-black font-mono text-slate-800">
+              {total} Claim{total === 1 ? '' : 's'}
+            </span>
+          </div>
         </div>
 
         {/* Filter Controls Row */}
-        <div className="flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-4 pt-4 border-t border-slate-100">
-          {/* Action Filter Button Group */}
-          <div className="flex items-center gap-1 bg-slate-100 p-1 rounded-lg">
-            {(['all', 'accept', 'flag', 'abstain'] as const).map((filter) => (
-              <button
-                key={filter}
-                type="button"
-                onClick={() => setActionFilter(filter)}
-                className={`px-3 py-1.5 text-xs font-semibold rounded-md capitalize transition-colors ${
-                  actionFilter === filter
-                    ? 'bg-white text-slate-900 shadow-sm'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {filter}
-              </button>
-            ))}
+        <div className="flex flex-col lg:flex-row items-stretch lg:items-center justify-between gap-4 pt-5 border-t border-slate-100">
+          {/* Action Filter Pills */}
+          <div className="flex items-center gap-1.5 bg-slate-100/80 p-1 rounded-xl flex-wrap">
+            <button
+              type="button"
+              onClick={() => setActionFilter('all')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                actionFilter === 'all'
+                  ? 'bg-white text-slate-900 shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              All Claims
+            </button>
+            <button
+              type="button"
+              onClick={() => setActionFilter('accept')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                actionFilter === 'accept'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              ✓ Approved
+            </button>
+            <button
+              type="button"
+              onClick={() => setActionFilter('flag')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                actionFilter === 'flag'
+                  ? 'bg-amber-500 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              ! Flagged for Review
+            </button>
+            <button
+              type="button"
+              onClick={() => setActionFilter('abstain')}
+              className={`px-3 py-1.5 text-xs font-bold rounded-lg transition-colors ${
+                actionFilter === 'abstain'
+                  ? 'bg-slate-700 text-white shadow-sm'
+                  : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              ⏸ Held for Info
+            </button>
           </div>
 
-          {/* Anomaly Checkbox & Location Filter */}
-          <div className="flex items-center gap-4 flex-wrap">
-            <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer select-none">
+          {/* Search Inputs */}
+          <div className="flex items-center gap-3 flex-wrap">
+            <label className="inline-flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer select-none bg-slate-50 px-3 py-2 rounded-lg border border-slate-200">
               <input
                 type="checkbox"
                 checked={anomalyOnly}
                 onChange={(e) => setAnomalyOnly(e.target.checked)}
                 className="w-4 h-4 rounded text-sky-600 focus:ring-sky-500 border-slate-300"
               />
-              Cost Anomalies Only
+              <span>Price Alerts Only</span>
             </label>
 
-            {/* Location Search Form */}
-            <form onSubmit={handleLocationSearch} className="flex items-center gap-2">
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search by procedure name..."
+              className="px-3.5 py-2 rounded-xl border border-slate-300 text-xs w-48 focus:outline-none focus:ring-2 focus:ring-sky-500"
+            />
+
+            <form onSubmit={handleLocationSearch} className="flex items-center gap-1.5">
               <input
                 type="text"
                 value={locationQuery}
                 onChange={(e) => setLocationQuery(e.target.value)}
-                placeholder="Filter by city / key..."
-                className="px-3 py-1.5 rounded-lg border border-slate-300 text-xs w-44 focus:outline-none focus:ring-2 focus:ring-sky-500"
+                placeholder="City (e.g. houston_tx)"
+                className="px-3 py-2 rounded-xl border border-slate-300 text-xs w-36 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
               />
               <button
                 type="submit"
-                className="px-3 py-1.5 bg-slate-800 text-white rounded-lg text-xs font-medium hover:bg-slate-900 transition-colors"
+                className="px-3.5 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold hover:bg-slate-800 transition-colors shadow-sm"
               >
                 Filter
               </button>
@@ -149,7 +205,7 @@ export default function Claims() {
 
       {/* Error state */}
       {error && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-sm">
+        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm">
           Failed to load claims: {error}
         </div>
       )}
@@ -157,10 +213,10 @@ export default function Claims() {
       {/* Loading Skeletons */}
       {loading ? (
         <div className="space-y-4">
-          {[1, 2, 3, 4].map((i) => (
+          {[1, 2, 3].map((i) => (
             <div
               key={i}
-              className="bg-white rounded-xl border border-slate-200 p-6 animate-pulse space-y-3"
+              className="bg-white rounded-2xl border border-slate-200 p-6 animate-pulse space-y-3"
             >
               <div className="h-4 bg-slate-200 rounded w-1/4" />
               <div className="h-6 bg-slate-200 rounded w-2/3" />
@@ -169,13 +225,13 @@ export default function Claims() {
           ))}
         </div>
       ) : filteredClaims.length === 0 ? (
-        <div className="bg-white rounded-xl border border-slate-200 p-12 text-center">
-          <div className="text-3xl mb-2">📋</div>
-          <h3 className="text-base font-bold text-slate-800">No Claims Found</h3>
+        <div className="bg-white rounded-2xl border border-slate-200 p-12 text-center shadow-card">
+          <div className="text-4xl mb-3">📋</div>
+          <h3 className="text-base font-bold text-slate-800">No Matching Claims Found</h3>
           <p className="text-xs text-slate-500 mt-1 max-w-sm mx-auto">
-            {locationQuery || actionFilter !== 'all' || anomalyOnly
-              ? 'No claims match your current filter settings. Try clearing the filters.'
-              : 'No claims in database yet. Submit text via the Audit page or run the seeder script.'}
+            {locationQuery || actionFilter !== 'all' || anomalyOnly || searchQuery
+              ? 'No claims match your current filter settings. Try resetting the filters.'
+              : 'No claims in the database yet. Submit a clinical bill via the Audit page to begin.'}
           </p>
         </div>
       ) : (
@@ -197,21 +253,21 @@ export default function Claims() {
           type="button"
           disabled={skip === 0 || loading}
           onClick={() => setSkip(Math.max(0, skip - limit))}
-          className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+          className="px-4 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm transition-colors"
         >
           &larr; Previous Page
         </button>
 
         <span className="text-xs text-slate-500">
           Showing {filteredClaims.length > 0 ? skip + 1 : 0}&ndash;
-          {Math.min(skip + limit, total)} of {total}
+          {Math.min(skip + limit, total)} of {total} claims
         </span>
 
         <button
           type="button"
           disabled={skip + limit >= total || loading}
           onClick={() => setSkip(skip + limit)}
-          className="px-4 py-2 rounded-lg border border-slate-300 bg-white text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm"
+          className="px-4 py-2 rounded-xl border border-slate-300 bg-white text-xs font-bold text-slate-700 hover:bg-slate-50 disabled:opacity-40 disabled:cursor-not-allowed shadow-sm transition-colors"
         >
           Next Page &rarr;
         </button>

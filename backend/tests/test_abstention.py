@@ -88,30 +88,201 @@ def test_abstention_on_no_relevant_evidence(abstention_service, base_claim):
 def test_abstention_on_conflicting_guidelines(abstention_service, base_claim):
     passages = [
         EvidencePassage(
-            passage_id="pas_2",
+            passage_id="pas_supports",
             title="Relevant Guideline A",
             source="AHA",
-            text="Guideline excerpt...",
+            text="Guideline excerpt supporting the clinical utility of this drug.",
             relevance_score=0.85,
+            used_in_decision=True
+        ),
+        EvidencePassage(
+            passage_id="pas_opposes",
+            title="Relevant Guideline B",
+            source="FDA",
+            text="Guideline excerpt discouraging this drug for this cohort.",
+            relevance_score=0.82,
             used_in_decision=True
         )
     ]
     cost_details = CostAnomalyDetails(is_anomaly=False, explanation="No cost")
 
-    # Model reports contradictory evidence
-    reasoning = "There are conflicting guidelines and contradictory evidence regarding the clinical utility of this drug in this cohort."
     decision = abstention_service.evaluate(
         base_claim,
         passages,
         cost_details,
         model_verdict=VerificationVerdict.PARTIALLY_SUPPORTED,
         model_support_score=0.50,
-        model_reasoning=reasoning
+        model_reasoning="Guideline recommendations differ for this cohort.",
+        model_conflict_assessment={
+            "has_conflict": True,
+            "supporting_passage_ids": ["pas_supports"],
+            "opposing_passage_ids": ["pas_opposes"],
+            "explanation": "One passage supports use and another discourages it."
+        }
     )
 
     assert decision.should_abstain is True
     assert decision.rule_triggered == AbstentionRule.CONFLICTING_EVIDENCE
-    assert "conflicting recommendations" in decision.reason.lower()
+    assert decision.details["conflict_assessment_valid"] is True
+    assert decision.details["original_model_verdict"] == VerificationVerdict.PARTIALLY_SUPPORTED.value
+    assert decision.details["supporting_passage_ids"] == ["pas_supports"]
+    assert "opposing positions" in decision.reason.lower()
+
+
+@pytest.mark.parametrize(
+    "assessment",
+    [
+        {
+            "has_conflict": True,
+            "supporting_passage_ids": ["pas_usable"],
+            "opposing_passage_ids": ["pas_not_retrieved"]
+        },
+        {
+            "has_conflict": True,
+            "supporting_passage_ids": ["pas_usable"],
+            "opposing_passage_ids": []
+        }
+    ],
+    ids=["unknown-passage-id", "missing-opposing-reference"]
+)
+def test_unverified_conflict_references_do_not_trigger_conflict(
+    abstention_service,
+    base_claim,
+    assessment
+):
+    passages = [
+        EvidencePassage(
+            passage_id="pas_usable",
+            title="Relevant Guideline",
+            source="AHA",
+            text="Relevant passage.",
+            relevance_score=0.85,
+            used_in_decision=True
+        )
+    ]
+    decision = abstention_service.evaluate(
+        base_claim,
+        passages,
+        CostAnomalyDetails(is_anomaly=False, explanation="No cost"),
+        model_verdict=VerificationVerdict.PARTIALLY_SUPPORTED,
+        model_support_score=0.50,
+        model_reasoning="There are conflicting recommendations.",
+        model_conflict_assessment=assessment
+    )
+
+    assert decision.should_abstain is True
+    assert decision.rule_triggered == AbstentionRule.INSUFFICIENT_EVIDENCE
+    assert decision.details["conflict_assessment_valid"] is False
+
+
+def test_conflict_wording_without_assessment_does_not_trigger_conflict(abstention_service, base_claim):
+    passages = [
+        EvidencePassage(
+            passage_id="pas_keyword_only",
+            title="Relevant Guideline",
+            source="AHA",
+            text="Relevant passage.",
+            relevance_score=0.85,
+            used_in_decision=True
+        )
+    ]
+    decision = abstention_service.evaluate(
+        base_claim,
+        passages,
+        CostAnomalyDetails(is_anomaly=False, explanation="No cost"),
+        model_verdict=VerificationVerdict.PARTIALLY_SUPPORTED,
+        model_support_score=0.50,
+        model_reasoning="There are conflicting recommendations."
+    )
+
+    assert decision.should_abstain is False
+    assert decision.rule_triggered is None
+    assert decision.details["conflict_assessment_valid"] is False
+
+
+def test_unverifiable_conflict_prevents_supported_acceptance(abstention_service, base_claim):
+    passages = [
+        EvidencePassage(
+            passage_id="pas_supported",
+            title="Relevant Guideline",
+            source="AHA",
+            text="Relevant passage supporting the claim.",
+            relevance_score=0.85,
+            used_in_decision=True
+        )
+    ]
+    decision = abstention_service.evaluate(
+        base_claim,
+        passages,
+        CostAnomalyDetails(is_anomaly=False, explanation="No cost"),
+        model_verdict=VerificationVerdict.SUPPORTED,
+        model_support_score=0.90,
+        model_conflict_assessment={
+            "has_conflict": True,
+            "supporting_passage_ids": ["pas_supported"],
+            "opposing_passage_ids": ["pas_missing"]
+        }
+    )
+
+    assert decision.should_abstain is True
+    assert decision.rule_triggered == AbstentionRule.INSUFFICIENT_EVIDENCE
+
+
+def test_negated_conflict_wording_does_not_trigger_conflict(abstention_service, base_claim):
+    passages = [
+        EvidencePassage(
+            passage_id="pas_no_conflict",
+            title="Relevant Guideline",
+            source="AHA",
+            text="Relevant passage.",
+            relevance_score=0.85,
+            used_in_decision=True
+        )
+    ]
+    decision = abstention_service.evaluate(
+        base_claim,
+        passages,
+        CostAnomalyDetails(is_anomaly=False, explanation="No cost"),
+        model_verdict=VerificationVerdict.PARTIALLY_SUPPORTED,
+        model_support_score=0.50,
+        model_reasoning="There is no conflicting evidence.",
+        model_conflict_assessment={
+            "has_conflict": False,
+            "supporting_passage_ids": [],
+            "opposing_passage_ids": []
+        }
+    )
+
+    assert decision.should_abstain is False
+    assert decision.rule_triggered is None
+
+
+def test_abstention_on_insufficient_evidence_without_conflict(abstention_service, base_claim):
+    passages = [
+        EvidencePassage(
+            passage_id="pas_insufficient",
+            title="Relevant Guideline",
+            source="FDA",
+            text="Relevant guideline excerpt without enough facts to assess the claimed outcome.",
+            relevance_score=0.80,
+            used_in_decision=True
+        )
+    ]
+    cost_details = CostAnomalyDetails(is_anomaly=False, explanation="No cost")
+
+    decision = abstention_service.evaluate(
+        base_claim,
+        passages,
+        cost_details,
+        model_verdict=VerificationVerdict.INSUFFICIENT_EVIDENCE,
+        model_support_score=0.20,
+        model_reasoning="The evidence is inconclusive and does not provide enough facts to judge the claim."
+    )
+
+    assert decision.should_abstain is True
+    assert decision.rule_triggered == AbstentionRule.INSUFFICIENT_EVIDENCE
+    assert "not provide enough" in decision.reason.lower()
+    assert "conflict" not in decision.reason.lower()
 
 
 def test_abstention_on_low_confidence_floor(abstention_service, base_claim):
@@ -140,6 +311,48 @@ def test_abstention_on_low_confidence_floor(abstention_service, base_claim):
     assert decision.should_abstain is True
     assert decision.rule_triggered == AbstentionRule.LOW_MODEL_CONFIDENCE
     assert "confidence floor" in decision.reason.lower()
+
+
+def test_explicit_contradiction_is_not_reclassified_as_conflict(abstention_service, base_claim):
+    passages = [
+        EvidencePassage(
+            passage_id="pas_contradicts",
+            title="Guideline A",
+            source="CDC",
+            text="Guideline excerpt explicitly contradicting the claim.",
+            relevance_score=0.80,
+            used_in_decision=True
+        ),
+        EvidencePassage(
+            passage_id="pas_supports",
+            title="Guideline B",
+            source="FDA",
+            text="Guideline excerpt supporting the claim.",
+            relevance_score=0.82,
+            used_in_decision=True
+        )
+    ]
+    cost_details = CostAnomalyDetails(is_anomaly=False, explanation="No cost")
+
+    decision = abstention_service.evaluate(
+        base_claim,
+        passages,
+        cost_details,
+        model_verdict=VerificationVerdict.CONTRADICTED,
+        model_support_score=0.15,
+        model_reasoning="The guideline contradicts the claim, but there is no conflicting evidence.",
+        model_conflict_assessment={
+            "has_conflict": True,
+            "supporting_passage_ids": ["pas_supports"],
+            "opposing_passage_ids": ["pas_contradicts"],
+            "explanation": "The cited passages have opposite recommendations."
+        }
+    )
+
+    assert decision.should_abstain is False
+    assert decision.rule_triggered is None
+    assert decision.details["conflict_assessment_valid"] is True
+    assert decision.details["original_model_verdict"] == VerificationVerdict.CONTRADICTED.value
 
 
 def test_abstention_on_unbenchmarked_high_cost(abstention_service, base_claim):

@@ -63,6 +63,31 @@ def test_parse_verification_output_contradicted(verification_service):
     assert "contradicted" in verdict.value
 
 
+def test_parse_verification_response_conflict_assessment(verification_service):
+    raw_json = """
+    {
+      "verdict": "partially_supported",
+      "support_score": 0.55,
+      "reasoning": "The guidance differs by patient cohort.",
+      "conflict_assessment": {
+        "has_conflict": true,
+        "supporting_passage_ids": ["pas_a"],
+        "opposing_passage_ids": ["pas_b"],
+        "explanation": "The cited passages recommend opposite positions."
+      }
+    }
+    """
+    verdict, score, reasoning, assessment = (
+        verification_service._parse_verification_response(raw_json)
+    )
+
+    assert verdict == VerificationVerdict.PARTIALLY_SUPPORTED
+    assert score == 0.55
+    assert "differs by patient cohort" in reasoning
+    assert assessment["supporting_passage_ids"] == ["pas_a"]
+    assert assessment["opposing_passage_ids"] == ["pas_b"]
+
+
 def test_determine_action_matrix(verification_service):
     # Case 1: Supported + Fair Price -> ACCEPT
     action, reason = verification_service._determine_action(

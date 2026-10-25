@@ -4,31 +4,59 @@ Endpoints for structured extraction, provenance tracking, claim retrieval,
 claim verification, cost anomaly detection, and system health.
 """
 
+from datetime import datetime, timezone
 from typing import Optional
-from fastapi import APIRouter, HTTPException, Query, status
+import uuid
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, status
 
 from app.config import get_settings
 from app.models.schemas import (
     AuditResponse,
     AuditTrail,
+    AuthResponse,
     Claim,
     ClaimListResponse,
+    CommunityStory,
+    CommunityStoryCreate,
+    CommunityStoryListResponse,
+    EvaluationListResponse,
+    EvaluationReport,
+    EvaluationRunRequest,
+    EvaluationRunResponse,
     ExtractAndVerifyResponse,
     ExtractionRequest,
     ExtractionResponse,
     HealthResponse,
+    HospitalSearchResponse,
+    InsightsSummaryResponse,
     LocationInsight,
     TrustDensityListResponse,
     TrustDensityMetrics,
     TrustDensityResponse,
+    UserCreateRequest,
+    UserLoginRequest,
+    UserResponse,
     VerificationResponse,
     VerificationResult,
 )
+from app.services.auth import (
+    DEMO_USER_ID,
+    DEMO_USER_EMAIL,
+    DEMO_USER_NAME,
+    DEMO_USER_ROLE,
+    DEMO_USER_ORG,
+    create_access_token,
+    decode_access_token,
+    hash_password,
+    verify_password,
+)
+from app.services.evaluation import evaluation_service
 from app.services.extraction import (
     ExtractionError,
     ExtractionService,
     OllamaConnectionError,
 )
+from app.services.hospital_finder import hospital_finder_service
 from app.services.provenance import ProvenanceService
 from app.services.storage import StorageError, storage_service
 from app.services.trust_density import trust_density_service
@@ -39,6 +67,202 @@ from app.utils.logger import logger
 router = APIRouter()
 settings = get_settings()
 extraction_service = ExtractionService()
+
+
+# ---------------------------------------------------------------------------
+# Authentication Dependencies & Helpers (Part 2)
+# ---------------------------------------------------------------------------
+
+async def get_current_user_optional(
+    authorization: Optional[str] = Header(None),
+) -> Optional[dict]:
+    """Retrieve authenticated user from Authorization Bearer header, if present and valid."""
+    if not authorization:
+        return None
+    token_data = decode_access_token(authorization)
+    if not token_data or "sub" not in token_data:
+        return None
+    user = await storage_service.get_user_by_id(token_data["sub"])
+    if user:
+        return user
+    # Fallback to token payload claims if user lookup was transient
+    return {
+        "user_id": token_data["sub"],
+        "email": token_data.get("email", ""),
+        "name": token_data.get("name", "Clinical Auditor"),
+        "role": "Clinical Claims Reviewer",
+    }
+
+
+async def get_current_user(
+    authorization: Optional[str] = Header(None),
+) -> dict:
+    """Enforce authenticated user from Authorization Bearer header."""
+    user = await get_current_user_optional(authorization)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication required. Please sign in or provide a valid session token.",
+            headers={"WWW-Authenticate": "Bearer"},
+        )
+    return user
+
+
+# ---------------------------------------------------------------------------
+# Authentication Endpoints (Part 2)
+# ---------------------------------------------------------------------------
+
+@router.post(
+    "/auth/signup",
+    response_model=AuthResponse,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create a new auditor account",
+    description="Registers a new user in MongoDB, hashes the password with bcrypt, and issues a JWT session token.",
+)
+async def signup_user(req: UserCreateRequest) -> AuthResponse:
+    """Register a new user account."""
+    clean_email = req.email.strip().lower()
+    if not clean_email or "@" not in clean_email:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Please provide a valid email address.",
+        )
+    if len(req.password) < 4:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Password must be at least 4 characters long.",
+        )
+
+    existing = await storage_service.get_user_by_email(clean_email)
+    if existing:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Email already registered. Please sign in instead.",
+        )
+
+    user_id = f"usr_{uuid.uuid4().hex[:10]}"
+    now = datetime.now(timezone.utc)
+    hashed = hash_password(req.password)
+
+    user_doc = {
+        "user_id": user_id,
+        "name": req.name.strip(),
+        "email": clean_email,
+        "hashed_password": hashed,
+        "role": "Clinical Claims Reviewer",
+        "organization": req.organization.strip() if req.organization else "Independent Clinical Reviewer",
+        "created_at": now,
+    }
+
+    try:
+        await storage_service.create_user(user_doc)
+    except Exception as e:
+        if "already exists" in str(e).lower():
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail="Email already registered. Please sign in instead.",
+            )
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Could not create user account: {e}",
+        )
+
+    token = create_access_token(user_id=user_id, email=clean_email, name=req.name.strip())
+    user_resp = UserResponse(
+        user_id=user_id,
+        name=req.name.strip(),
+        email=clean_email,
+        role=user_doc["role"],
+        organization=user_doc["organization"],
+        created_at=now,
+    )
+    return AuthResponse(access_token=token, token_type="bearer", user=user_resp)
+
+
+@router.post(
+    "/auth/login",
+    response_model=AuthResponse,
+    summary="Sign in to existing account",
+    description="Validates email and bcrypt-hashed password, then issues a JWT session token.",
+)
+async def login_user(req: UserLoginRequest) -> AuthResponse:
+    """Authenticate existing user credentials."""
+    clean_id = req.email.strip().lower()
+    user = await storage_service.get_user_by_email(clean_id)
+    if not user:
+        # Check by user_id
+        user = await storage_service.get_user_by_id(clean_id)
+    if not user:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password. Please verify and try again.",
+        )
+
+    if not verify_password(req.password, user.get("hashed_password", "")):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Incorrect email or password. Please verify and try again.",
+        )
+
+    token = create_access_token(user_id=user["user_id"], email=user["email"], name=user["name"])
+    user_resp = UserResponse(
+        user_id=user["user_id"],
+        name=user["name"],
+        email=user["email"],
+        role=user.get("role", "Clinical Claims Reviewer"),
+        organization=user.get("organization", "Independent Clinical Reviewer"),
+        created_at=user.get("created_at") or datetime.now(timezone.utc),
+    )
+    return AuthResponse(access_token=token, token_type="bearer", user=user_resp)
+
+
+@router.post(
+    "/auth/demo",
+    response_model=AuthResponse,
+    summary="1-click Demo Auditor sign in",
+    description="Provides instant pre-authenticated session token for the canonical Demo Auditor (Dr. Sarah Chen, MD).",
+)
+async def demo_user_session() -> AuthResponse:
+    """1-click demo login."""
+    demo_user = await storage_service.get_user_by_id(DEMO_USER_ID)
+    if not demo_user:
+        demo_user = await storage_service.get_user_by_email(DEMO_USER_EMAIL.lower())
+
+    user_id = demo_user["user_id"] if demo_user else DEMO_USER_ID
+    email = demo_user["email"] if demo_user else DEMO_USER_EMAIL
+    name = demo_user["name"] if demo_user else DEMO_USER_NAME
+    role = demo_user.get("role", DEMO_USER_ROLE) if demo_user else DEMO_USER_ROLE
+    org = demo_user.get("organization", DEMO_USER_ORG) if demo_user else DEMO_USER_ORG
+    created_at = (demo_user.get("created_at") if demo_user else None) or datetime(2026, 1, 1, 0, 0, tzinfo=timezone.utc)
+
+    token = create_access_token(user_id=user_id, email=email, name=name)
+    user_resp = UserResponse(
+        user_id=user_id,
+        name=name,
+        email=email,
+        role=role,
+        organization=org,
+        created_at=created_at,
+    )
+    return AuthResponse(access_token=token, token_type="bearer", user=user_resp)
+
+
+@router.get(
+    "/auth/me",
+    response_model=UserResponse,
+    summary="Get current user profile",
+    description="Returns the profile of the currently authenticated user.",
+)
+async def get_me(current_user: dict = Depends(get_current_user)) -> UserResponse:
+    """Get active session profile."""
+    return UserResponse(
+        user_id=current_user["user_id"],
+        name=current_user["name"],
+        email=current_user["email"],
+        role=current_user.get("role", "Clinical Claims Reviewer"),
+        organization=current_user.get("organization", "Independent Clinical Reviewer"),
+        created_at=current_user.get("created_at") or datetime.now(timezone.utc),
+    )
 
 
 @router.get(
@@ -77,7 +301,10 @@ async def health_check() -> HealthResponse:
     summary="Extract structured claim with provenance",
     description="Accepts raw clinical notes, patient forum reports, or hospital bill lines. Runs extraction via local Ollama LLM, attaches tamper-evident provenance, and stores the claim."
 )
-async def extract_claim(request: ExtractionRequest) -> ExtractionResponse:
+async def extract_claim(
+    request: ExtractionRequest,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+) -> ExtractionResponse:
     """Submit raw text and get back structured claim with full provenance."""
     raw_text = request.text.strip()
     if not raw_text:
@@ -115,6 +342,7 @@ async def extract_claim(request: ExtractionRequest) -> ExtractionResponse:
         source_url=request.source_url,
         source_timestamp=request.source_timestamp,
     )
+    claim.user_id = request.user_id or (current_user.get("user_id") if current_user else None)
 
     # 3. Store in MongoDB if requested
     stored = False
@@ -176,11 +404,22 @@ async def list_claims(
     limit: int = Query(default=20, ge=1, le=100, description="Max claims to return"),
     skip: int = Query(default=0, ge=0, description="Number of claims to skip"),
     location: Optional[str] = Query(default=None, description="Optional location filter (e.g. 'houston_tx', 'chicago_il', 'Atlanta')"),
+    user_id: Optional[str] = Query(default=None, description="Optional user ID filter for personal memory"),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
 ) -> ClaimListResponse:
-    """List claims stored in EvidenceBridge, optionally filtered by location."""
+    """List claims stored in EvidenceBridge, optionally filtered by location and user_id."""
+    effective_user_id = user_id or (current_user.get("user_id") if current_user else None)
     try:
-        claims = await storage_service.list_claims(limit=limit, skip=skip, location=location)
-        total = await storage_service.count_claims(location=location)
+        claims = await storage_service.list_claims(
+            limit=limit,
+            skip=skip,
+            location=location,
+            user_id=effective_user_id,
+        )
+        total = await storage_service.count_claims(
+            location=location,
+            user_id=effective_user_id,
+        )
         return ClaimListResponse(
             total=total,
             count=len(claims),
@@ -271,7 +510,10 @@ async def verify_claim_by_id(claim_id: str) -> VerificationResponse:
     summary="Extract claim and verify in one step",
     description="Submits raw text, runs extraction, binds provenance, and immediately runs clinical evidence verification, cost anomaly checks, and full decision audit logging."
 )
-async def extract_and_verify(request: ExtractionRequest) -> ExtractAndVerifyResponse:
+async def extract_and_verify(
+    request: ExtractionRequest,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+) -> ExtractAndVerifyResponse:
     """Extract structured claim and immediately audit it against knowledge base."""
     raw_text = request.text.strip()
     if not raw_text:
@@ -307,6 +549,7 @@ async def extract_and_verify(request: ExtractionRequest) -> ExtractAndVerifyResp
         source_url=request.source_url,
         source_timestamp=request.source_timestamp,
     )
+    claim.user_id = request.user_id or (current_user.get("user_id") if current_user else None)
 
     # 3. Store claim
     stored = False
@@ -567,3 +810,314 @@ async def recompute_trust_density(location_key: str) -> TrustDensityResponse:
         insight=insight,
         message=f"Trust density successfully recomputed and updated for '{loc_clean}'."
     )
+
+
+# ==============================================================================
+# Layer 6: Evaluation Harness Endpoints
+# ==============================================================================
+
+@router.post(
+    "/evaluate",
+    response_model=EvaluationRunResponse,
+    summary="Run benchmark evaluation over labeled clinical claims",
+    description=(
+        "Executes batch evaluation over the gold-standard dataset. Calculates precision, recall, "
+        "F1 (per-class + macro), action accuracy, cost anomaly detection performance, abstention gate "
+        "calibration, and Expected Calibration Error (ECE). Saves report to MongoDB."
+    ),
+)
+async def run_evaluation(
+    request: Optional[EvaluationRunRequest] = None,
+) -> EvaluationRunResponse:
+    """Trigger an evaluation run on labeled benchmark claims."""
+    req = request or EvaluationRunRequest()
+    try:
+        report = await evaluation_service.run_evaluation(
+            dataset_path=req.dataset_path,
+            case_ids=req.case_ids,
+            force_reverify=req.force_reverify,
+            offline_mode=req.offline_mode,
+            custom_labels=req.custom_labels,
+        )
+        return EvaluationRunResponse(
+            success=True,
+            run_id=report.run_id,
+            report=report,
+            message=f"Evaluation run completed successfully on {report.total_samples} samples",
+        )
+    except FileNotFoundError as e:
+        logger.error(f"Evaluation dataset error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=str(e),
+        )
+    except ValueError as e:
+        logger.error(f"Evaluation parameter error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=str(e),
+        )
+    except Exception as e:
+        logger.error(f"Evaluation execution error: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Evaluation run failed: {e}",
+        )
+
+
+@router.get(
+    "/evaluate/{run_id}",
+    response_model=EvaluationReport,
+    summary="Retrieve evaluation report by run ID",
+    description="Fetches a previously executed evaluation run report with full statistical breakdown and Markdown summary.",
+)
+async def get_evaluation_report(run_id: str) -> EvaluationReport:
+    """Retrieve historical evaluation run report."""
+    record = await storage_service.get_evaluation_report(run_id)
+    if not record:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Evaluation report with run_id '{run_id}' not found.",
+        )
+    return EvaluationReport.model_validate(record)
+
+
+@router.get(
+    "/evaluate",
+    response_model=EvaluationListResponse,
+    summary="List recent evaluation runs",
+    description="Retrieve a paginated list of historical evaluation runs stored in MongoDB.",
+)
+async def list_evaluation_runs(
+    limit: int = Query(default=20, ge=1, le=100, description="Max reports to return"),
+    skip: int = Query(default=0, ge=0, description="Number of reports to skip"),
+) -> EvaluationListResponse:
+    """List historical evaluation runs."""
+    records = await storage_service.list_evaluation_reports(limit=limit, skip=skip)
+    total = await storage_service.count_evaluation_reports()
+
+    reports: list[EvaluationReport] = []
+    for rec in records:
+        try:
+            reports.append(EvaluationReport.model_validate(rec))
+        except Exception as e:
+            logger.warning(f"Could not parse evaluation report record: {e}")
+
+    return EvaluationListResponse(
+        total=total,
+        count=len(reports),
+        runs=reports,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Community Stories (Recovery Stories) Endpoints
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/stories",
+    response_model=CommunityStoryListResponse,
+    summary="List community recovery stories",
+    description="Retrieve personal recovery and coping stories voluntarily shared by community members.",
+)
+async def list_community_stories(
+    limit: int = Query(default=50, ge=1, le=100, description="Max stories to return"),
+    skip: int = Query(default=0, ge=0, description="Stories to skip"),
+    user_id: Optional[str] = Query(default=None, description="Filter stories by author user ID"),
+) -> CommunityStoryListResponse:
+    """List community recovery stories, sorted newest first, optionally filtered by author user ID."""
+    records, total = await storage_service.list_community_stories(limit=limit, skip=skip, user_id=user_id)
+    stories: list[CommunityStory] = []
+    for rec in records:
+        try:
+            stories.append(CommunityStory.model_validate(rec))
+        except Exception as e:
+            logger.warning(f"Could not parse community story: {e}")
+
+    return CommunityStoryListResponse(
+        total=total,
+        count=len(stories),
+        stories=stories,
+    )
+
+
+@router.post(
+    "/stories",
+    response_model=CommunityStory,
+    status_code=status.HTTP_201_CREATED,
+    summary="Post a community recovery story",
+    description="Voluntarily share a personal recovery story, coping mechanism, or experience.",
+)
+async def create_community_story(
+    payload: CommunityStoryCreate,
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+) -> CommunityStory:
+    """Submit a voluntary community recovery story."""
+    story_id = f"story_{uuid.uuid4().hex[:12]}"
+    now = datetime.now(timezone.utc)
+    effective_user_id = payload.user_id or (current_user.get("user_id") if current_user else None)
+
+    story_obj = CommunityStory(
+        story_id=story_id,
+        title=payload.title.strip() if payload.title else None,
+        story_text=payload.story_text.strip(),
+        author_name=payload.author_name.strip() if payload.author_name else "Community Member",
+        condition_or_topic=payload.condition_or_topic.strip() if payload.condition_or_topic else None,
+        contact_email=payload.contact_email.strip() if payload.contact_email else None,
+        contact_instagram=payload.contact_instagram.strip().lstrip('@') if payload.contact_instagram else None,
+        consent_acknowledged=payload.consent_acknowledged,
+        created_at=now,
+        user_id=effective_user_id,
+    )
+
+    doc = story_obj.model_dump(mode="python")
+    await storage_service.save_community_story(doc)
+    logger.info(f"Created community story '{story_id}' by '{story_obj.author_name}'")
+
+    return story_obj
+
+
+@router.get(
+    "/stories/{story_id}",
+    response_model=CommunityStory,
+    summary="Get single community story",
+    description="Retrieve a single community story by story_id.",
+)
+async def get_community_story(story_id: str) -> CommunityStory:
+    """Get single community story by story_id."""
+    doc = await storage_service.get_community_story(story_id)
+    if not doc:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Community story with ID '{story_id}' not found.",
+        )
+    return CommunityStory.model_validate(doc)
+
+
+# ---------------------------------------------------------------------------
+# Visual Insights & Statistics Dashboard
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/insights/summary",
+    response_model=InsightsSummaryResponse,
+    summary="Get aggregated statistics & visual insights",
+    description="Returns aggregated decision distributions, price alert breakdowns, guideline support rates, and risk highlights for visual dashboard graphs."
+)
+async def get_insights_summary(
+    user_id: Optional[str] = Query(default=None, description="Optional user ID for personal memory statistics"),
+    current_user: Optional[dict] = Depends(get_current_user_optional),
+) -> InsightsSummaryResponse:
+    """Retrieve statistical aggregations for visual charts and dashboard analytics."""
+    effective_user_id = user_id or (current_user.get("user_id") if current_user else None)
+    try:
+        return await storage_service.get_insights_summary(user_id=effective_user_id)
+    except Exception as e:
+        logger.error(f"Error producing insights summary: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to generate insights summary: {e}"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Hospital Finder & Price Comparison
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/hospitals/search",
+    response_model=HospitalSearchResponse,
+    summary="Search nearby hospitals with distance, prices, and accreditations",
+    description=(
+        "Locates nearby hospitals and medical centers, calculates straight-line distance (Haversine), "
+        "attaches official published consultation/procedure price benchmarks, displays attributable quality "
+        "accreditations (NABH, JCI, CMS), and provides non-diagnostic symptom filtering with immediate "
+        "emergency red-flag warnings."
+    ),
+)
+@router.get(
+    "/api/hospitals/search",
+    response_model=HospitalSearchResponse,
+    include_in_schema=False,
+)
+async def search_hospitals(
+    city_or_area: Optional[str] = Query(None, description="City or neighborhood area (e.g. 'Atlanta', 'Chicago', 'Bengaluru')"),
+    lat: Optional[float] = Query(None, description="Latitude from browser geolocation"),
+    lon: Optional[float] = Query(None, description="Longitude from browser geolocation"),
+    symptom: Optional[str] = Query(None, description="Health concern or symptom (e.g. 'fever', 'headache', 'minor injury')"),
+    max_distance_km: float = Query(35.0, ge=1.0, le=500.0, description="Maximum travel radius in kilometers"),
+    care_type: Optional[str] = Query(None, description="Facility care type filter (e.g. 'Hospital', 'Trauma Center', 'Pediatric')"),
+    sort_by: str = Query("distance", pattern="^(distance|cost|rating)$", description="Sort criteria: distance, cost, or rating"),
+) -> HospitalSearchResponse:
+    """Search and compare nearby hospitals with honest pricing and trust indicators."""
+    try:
+        return hospital_finder_service.search_hospitals(
+            city_or_area=city_or_area,
+            lat=lat,
+            lon=lon,
+            symptom=symptom,
+            max_distance_km=max_distance_km,
+            care_type=care_type,
+            sort_by=sort_by,
+        )
+    except Exception as e:
+        logger.error(f"Error executing hospital search: {e}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Hospital search failed: {e}",
+        )
+
+
+# ---------------------------------------------------------------------------
+# Text-To-Speech Audio Fallback (Bilingual: Kannada & English)
+# ---------------------------------------------------------------------------
+
+@router.get(
+    "/tts",
+    summary="Audio TTS synthesis stream (Kannada / English)",
+    description="Streams synthesized speech audio (MP3) for languages like Kannada or English when client browser lacks local offline voice pack."
+)
+@router.get(
+    "/api/tts",
+    include_in_schema=False,
+)
+async def text_to_speech(
+    text: str = Query(..., min_length=1, max_length=1000, description="Text to synthesize into spoken audio"),
+    lang: str = Query("kn", description="Target language code: 'kn' for Kannada, 'en' for English"),
+):
+    """Provide free, reliable speech synthesis fallback for Kannada and English without paid API keys."""
+    import urllib.parse
+    import httpx
+    from fastapi.responses import Response
+
+    clean_text = text.strip()
+    if not clean_text:
+        raise HTTPException(status_code=400, detail="Text cannot be empty.")
+
+    # Limit snippet for audio stream
+    snippet = clean_text[:350]
+    encoded = urllib.parse.quote(snippet)
+    target_lang = "kn" if lang.startswith("kn") else "en"
+    url = f"https://translate.google.com/translate_tts?ie=UTF-8&tl={target_lang}&client=tw-ob&q={encoded}"
+
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+    }
+
+    try:
+        async with httpx.AsyncClient(timeout=8.0) as client:
+            resp = await client.get(url, headers=headers)
+            if resp.status_code == 200 and len(resp.content) > 100:
+                return Response(
+                    content=resp.content,
+                    media_type="audio/mpeg",
+                    headers={"Cache-Control": "public, max-age=86400"},
+                )
+    except Exception as e:
+        logger.warning(f"Fallback TTS failed: {e}")
+
+    raise HTTPException(status_code=502, detail="Speech synthesis service unavailable.")
+
+
+
+

@@ -54,23 +54,54 @@ class CostAnomalyService:
             logger.error(f"Failed to load price benchmarks: {e}")
 
     @staticmethod
+    def detect_currency(cost_str: Optional[str], text: str = "") -> str:
+        """Detect currency from cost range string and original document text."""
+        combined = f"{cost_str or ''} {text or ''}".lower()
+        if "₹" in combined or "inr" in combined or "rs." in combined or "rs " in combined or "rupees" in combined:
+            return "INR"
+        if "€" in combined or "eur" in combined or "euro" in combined:
+            return "EUR"
+        if "£" in combined or "gbp" in combined or "pounds" in combined:
+            return "GBP"
+        return "USD"
+
+    @staticmethod
     def extract_numeric_cost(cost_str: Optional[str]) -> Optional[float]:
         """
-        Extract primary numeric dollar value from a cost range string.
+        Extract primary numeric value from a cost range string across currencies (USD, INR, EUR, GBP).
         Examples:
             '$4,850.00' -> 4850.0
+            '₹45,000' -> 45000.0
+            'Rs. 1,200.00' -> 1200.0
             '$148.00 ($74.00 per tablet)' -> 148.0
             '$980 per month' -> 980.0
             '$4,500 - $6,000' -> 6000.0 (uses upper range)
+            'total billed charge: 720.00 USD' -> 720.0
+            '1,250 USD' -> 1250.0
+            'amount: 850' -> 850.0
+            '720.00' -> 720.0
         """
         if not cost_str or not isinstance(cost_str, str):
             return None
 
-        # Look for dollar amounts with optional commas and decimals
-        matches = re.findall(r"\$\s*([\d,]+(?:\.\d{1,2})?)", cost_str)
+        # 1. Look for currency symbols ($, ₹, €, £) followed by digits
+        matches = re.findall(r"[\$₹€£]\s*([\d,]+(?:\.\d{1,2})?)", cost_str)
+
+        # 2. Look for Rs. / INR / USD / EUR / GBP followed by digits
         if not matches:
-            # Check for naked numbers with currency context
-            matches = re.findall(r"(?:USD|cost|charge|billed|total)\s*[:=]?\s*([\d,]+(?:\.\d{1,2})?)", cost_str, re.IGNORECASE)
+            matches = re.findall(r"(?:rs\.?|inr|usd|eur|gbp)\s*([\d,]+(?:\.\d{1,2})?)", cost_str, re.IGNORECASE)
+
+        # 3. Number followed by currency code/word (e.g. 1,250 USD, 50,000 INR, 720 dollars, 1200 rupees)
+        if not matches:
+            matches = re.findall(r"\b([\d,]+(?:\.\d{1,2})?)\s*(?:USD|INR|EUR|GBP|dollars?|rupees?|euros?|pounds?)\b", cost_str, re.IGNORECASE)
+
+        # 4. Currency/billing keywords preceding number (e.g. total: 1,250, charge 720.00, billed 850)
+        if not matches:
+            matches = re.findall(r"(?:USD|INR|cost|charge|billed|total|amount|fee|price)\s*[:=]?\s*([\d,]+(?:\.\d{1,2})?)", cost_str, re.IGNORECASE)
+
+        # 5. Pure numeric string fallback (e.g. "720" or "1,250.00")
+        if not matches:
+            matches = re.findall(r"^\s*([\d,]+(?:\.\d{1,2})?)\s*$", cost_str)
 
         if not matches:
             return None
@@ -92,31 +123,77 @@ class CostAnomalyService:
     def find_matching_benchmark(self, entity: str, text: str = "") -> Optional[CostBenchmark]:
         """
         Find best matching price benchmark for a medical entity or procedure.
-        Matches via CPT codes, keywords, or entity name substrings.
+        Prioritizes:
+          1. Exact CPT/HCPCS code match in entity
+          2. Exact CPT/HCPCS code match in text (filtered by relevance to entity)
+          3. Entity title and keyword relevance scoring with anatomical validation
         """
-        combined = f"{entity} {text}".lower()
+        entity_lower = entity.lower().strip()
+        text_lower = text.lower().strip()
+        code_pattern = re.compile(r"\b(?:[A-Z]\d{4}|\d{5})\b", re.IGNORECASE)
 
-        # 1. Match by CPT code if present
-        for bm in self.benchmarks:
-            if bm.cpt_code and bm.cpt_code.lower() in combined:
-                return bm
+        # 1. Priority: CPT/HCPCS code present in entity itself
+        entity_codes = {c.upper() for c in code_pattern.findall(entity_lower)}
+        if entity_codes:
+            for bm in self.benchmarks:
+                if bm.cpt_code and bm.cpt_code.upper() in entity_codes:
+                    return bm
 
-        # 2. Match by keywords
+        # 2. Priority: CPT/HCPCS code in text, provided it aligns with the entity
+        text_codes = {c.upper() for c in code_pattern.findall(text_lower)}
+        if text_codes:
+            candidate_bms = [bm for bm in self.benchmarks if bm.cpt_code and bm.cpt_code.upper() in text_codes]
+            for bm in candidate_bms:
+                bm_words = set(re.findall(r"\w+", bm.entity.lower()))
+                entity_words = set(re.findall(r"\w+", entity_lower))
+                if bm_words & entity_words - {"cpt", "without", "with", "oral", "tablet", "procedure"}:
+                    return bm
+
+        # 3. Match by entity name & keywords with scoring
         best_match: Optional[CostBenchmark] = None
         highest_score = 0
 
-        for bm in self.benchmarks:
-            score = 0
-            # Entity name match
-            if bm.entity.lower() in combined or entity.lower() in bm.entity.lower():
-                score += 5
+        # Anatomical conflict check between entity and benchmark
+        try:
+            from app.services.verification import ANATOMICAL_REGIONS
+            entity_regions = {
+                region for region, keywords in ANATOMICAL_REGIONS.items()
+                if any(re.search(r"\b" + re.escape(kw) + r"\b", entity_lower) for kw in keywords)
+            }
+        except ImportError:
+            entity_regions = set()
+            ANATOMICAL_REGIONS = {}
 
-            # Keyword matches
+        for bm in self.benchmarks:
+            bm_entity_lower = bm.entity.lower()
+            bm_regions = {
+                region for region, keywords in ANATOMICAL_REGIONS.items()
+                if any(re.search(r"\b" + re.escape(kw) + r"\b", bm_entity_lower) for kw in keywords)
+            }
+            # Reject if there is a direct anatomical conflict (e.g. brain vs knee)
+            if entity_regions and bm_regions and not (entity_regions & bm_regions):
+                continue
+
+            score = 0
+            # Exact or substring match in entity
+            if bm_entity_lower in entity_lower or entity_lower in bm_entity_lower:
+                score += 15
+
+            # Significant keyword overlap in entity
             for kw in bm.keywords:
-                if kw.lower() in combined:
+                kw_lower = kw.lower()
+                if re.search(r"\b" + re.escape(kw_lower) + r"\b", entity_lower):
+                    score += 6
+                elif re.search(r"\b" + re.escape(kw_lower) + r"\b", text_lower):
                     score += 2
 
-            if score > highest_score and score >= 2:
+            # Overlap with benchmark entity words
+            bm_tokens = set(re.findall(r"\w+", bm_entity_lower)) - {"without", "with", "cpt", "per", "the", "and"}
+            entity_tokens = set(re.findall(r"\w+", entity_lower)) - {"without", "with", "cpt", "per", "the", "and"}
+            token_overlap = len(bm_tokens & entity_tokens)
+            score += token_overlap * 3
+
+            if score > highest_score and score >= 4:
                 highest_score = score
                 best_match = bm
 
@@ -126,46 +203,94 @@ class CostAnomalyService:
         """
         Evaluate claim's cost_range against local price benchmarks.
         Returns CostAnomalyDetails indicating if the claim is a flagged anomaly.
+        Preserves original document currency (INR, USD, EUR, GBP).
         """
         cost_str = claim.extracted_fields.cost_range
         extracted_amount = self.extract_numeric_cost(cost_str)
-
-        if extracted_amount is None:
-            return CostAnomalyDetails(
-                is_anomaly=False,
-                threshold_multiplier=self.threshold_multiplier,
-                explanation="No numeric cost figure identified in claim for anomaly auditing."
-            )
-
         entity = claim.extracted_fields.entity
         benchmark = self.find_matching_benchmark(entity, claim.original_text)
+
+        claim_currency = self.detect_currency(cost_str, claim.original_text)
+        curr_symbol = "₹" if claim_currency == "INR" else ("€" if claim_currency == "EUR" else ("£" if claim_currency == "GBP" else "$"))
+
+        if extracted_amount is None:
+            explanation = "No numeric cost figure identified in claim for anomaly auditing."
+            if benchmark:
+                bm_symbol = "₹" if benchmark.currency == "INR" else ("€" if benchmark.currency == "EUR" else ("£" if benchmark.currency == "GBP" else "$"))
+                explanation += f" Matched benchmark reference: '{benchmark.entity}' ({bm_symbol}{benchmark.typical_min:,.2f} - {bm_symbol}{benchmark.typical_max:,.2f} {benchmark.unit or ''})."
+            return CostAnomalyDetails(
+                is_anomaly=False,
+                benchmark_matched=bool(benchmark is not None),
+                currency=claim_currency,
+                threshold_multiplier=self.threshold_multiplier,
+                explanation=explanation,
+                benchmark_name=benchmark.entity if benchmark else None,
+                benchmark_source=benchmark.source if benchmark else None,
+                cpt_code=benchmark.cpt_code if benchmark else None,
+                benchmark_min=benchmark.typical_min if benchmark else None,
+                benchmark_max=benchmark.typical_max if benchmark else None,
+            )
 
         if not benchmark:
             return CostAnomalyDetails(
                 is_anomaly=False,
+                benchmark_matched=False,
+                currency=claim_currency,
                 extracted_amount=extracted_amount,
                 threshold_multiplier=self.threshold_multiplier,
-                explanation=f"No public pricing benchmark found for entity '{entity}'. Auditing deferred."
+                explanation=f"No public pricing benchmark found for entity '{entity}'. Auditing deferred.",
+                benchmark_name=None,
+                benchmark_source=None,
+                cpt_code=None,
             )
 
         # Compare against benchmark range
         b_min = benchmark.typical_min
         b_max = benchmark.typical_max
 
-        # Normal within benchmark
-        if extracted_amount <= b_max:
+        # Guard against comparing different currencies directly without verified exchange rate
+        if benchmark.currency != claim_currency:
+            bm_symbol = "₹" if benchmark.currency == "INR" else ("€" if benchmark.currency == "EUR" else ("£" if benchmark.currency == "GBP" else "$"))
             return CostAnomalyDetails(
                 is_anomaly=False,
+                benchmark_matched=True,
+                currency=claim_currency,
                 extracted_amount=extracted_amount,
                 benchmark_min=b_min,
                 benchmark_max=b_max,
-                multiplier=round(extracted_amount / b_max, 2) if b_max > 0 else 1.0,
                 threshold_multiplier=self.threshold_multiplier,
                 severity="none",
                 explanation=(
-                    f"Billed amount of ${extracted_amount:,.2f} falls within or below typical benchmark "
-                    f"(${b_min:,.2f} - ${b_max:,.2f} {benchmark.unit or ''}, source: {benchmark.source})."
-                )
+                    f"Billed amount of {curr_symbol}{extracted_amount:,.2f} ({claim_currency}) noted. "
+                    f"Matched benchmark '{benchmark.entity}' is published in {benchmark.currency} "
+                    f"({bm_symbol}{b_min:,.2f} - {bm_symbol}{b_max:,.2f}, source: {benchmark.source}). "
+                    f"Cross-currency auditing deferred to avoid inaccurate markup alerts."
+                ),
+                benchmark_name=benchmark.entity,
+                benchmark_source=benchmark.source,
+                cpt_code=benchmark.cpt_code,
+            )
+
+        # Normal within benchmark
+        if extracted_amount <= b_max:
+            multiplier = round(extracted_amount / b_max, 2) if b_max > 0 else 1.0
+            return CostAnomalyDetails(
+                is_anomaly=False,
+                benchmark_matched=True,
+                currency=claim_currency,
+                extracted_amount=extracted_amount,
+                benchmark_min=b_min,
+                benchmark_max=b_max,
+                multiplier=multiplier,
+                threshold_multiplier=self.threshold_multiplier,
+                severity="none",
+                explanation=(
+                    f"Billed amount of {curr_symbol}{extracted_amount:,.2f} falls within or below typical benchmark "
+                    f"({curr_symbol}{b_min:,.2f} - {curr_symbol}{b_max:,.2f} {benchmark.unit or ''}, source: {benchmark.source})."
+                ),
+                benchmark_name=benchmark.entity,
+                benchmark_source=benchmark.source,
+                cpt_code=benchmark.cpt_code,
             )
 
         # Cost exceeds typical maximum: calculate markup multiplier
@@ -183,27 +308,32 @@ class CostAnomalyService:
 
         if is_anomaly:
             explanation = (
-                f"COST ANOMALY DETECTED: Billed amount of ${extracted_amount:,.2f} is {multiplier:.1f}× higher "
-                f"than the benchmark maximum of ${b_max:,.2f} "
-                f"(typical range: ${b_min:,.2f} - ${b_max:,.2f} {benchmark.unit or ''}, "
+                f"COST ANOMALY DETECTED: Billed amount of {curr_symbol}{extracted_amount:,.2f} is {multiplier:.1f}× higher "
+                f"than the benchmark maximum of {curr_symbol}{b_max:,.2f} "
+                f"(typical range: {curr_symbol}{b_min:,.2f} - {curr_symbol}{b_max:,.2f} {benchmark.unit or ''}, "
                 f"threshold: {self.threshold_multiplier}×, source: {benchmark.source})."
             )
             logger.warning(f"Claim {claim.claim_id}: {explanation}")
         else:
             explanation = (
-                f"Billed amount of ${extracted_amount:,.2f} exceeds typical maximum of ${b_max:,.2f} "
+                f"Billed amount of {curr_symbol}{extracted_amount:,.2f} exceeds typical maximum of {curr_symbol}{b_max:,.2f} "
                 f"({multiplier:.1f}×), but remains below the anomaly threshold multiplier of {self.threshold_multiplier}×."
             )
 
         return CostAnomalyDetails(
             is_anomaly=is_anomaly,
+            benchmark_matched=True,
+            currency=claim_currency,
             extracted_amount=extracted_amount,
             benchmark_min=b_min,
             benchmark_max=b_max,
             multiplier=multiplier,
             threshold_multiplier=self.threshold_multiplier,
             severity=severity,
-            explanation=explanation
+            explanation=explanation,
+            benchmark_name=benchmark.entity,
+            benchmark_source=benchmark.source,
+            cpt_code=benchmark.cpt_code,
         )
 
 

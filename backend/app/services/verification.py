@@ -50,11 +50,31 @@ OUTPUT STRICTLY A VALID JSON OBJECT WITH THIS FORMAT:
 {
   "verdict": "supported" | "partially_supported" | "contradicted" | "insufficient_evidence",
   "support_score": float between 0.0 and 1.0,
-  "reasoning": "Clear 1-3 sentence factual explanation directly referencing the evidence passages"
+  "reasoning": "Clear 1-3 sentence factual explanation directly referencing the evidence passages",
+  "conflict_assessment": {
+    "has_conflict": boolean,
+    "supporting_passage_ids": ["passage ID", ...],
+    "opposing_passage_ids": ["passage ID", ...],
+    "explanation": "Brief explanation of the opposing positions"
+  }
 }
 
+Set has_conflict to true only when usable passages explicitly support opposing positions
+on the claim. Cite the exact passage IDs shown with each passage. Do not treat insufficient
+evidence, uncertainty, or wording alone as a conflict. If conflict is not established,
+set has_conflict to false and use empty passage ID lists. A contradicted verdict must
+remain contradicted; do not use conflict wording alone to change it.
 STRICT RULE: Do not output markdown or text outside the JSON object.
 """
+
+ANATOMICAL_REGIONS: dict[str, set[str]] = {
+    "brain": {"brain", "head", "cranial", "cerebral", "neuro", "neuroimaging", "intracranial", "encephalopathy"},
+    "knee": {"knee", "patella", "meniscus", "meniscal"},
+    "chest": {"chest", "thorax", "thoracic", "lung", "pulmonary"},
+    "abdomen": {"abdomen", "abdominal", "pelvis", "pelvic"},
+    "spine": {"spine", "spinal", "lumbar", "cervical", "vertebra"},
+}
+
 
 
 class VerificationService:
@@ -130,7 +150,8 @@ class VerificationService:
     def _compute_bm25_scores(self, query_tokens: list[str], entity_tokens: set[str]) -> dict[str, float]:
         """
         Compute BM25-style scores for all guidelines based on query and entity tokens.
-        Includes TF saturation (k1=1.5), length normalization (b=0.75), and IDF term weighting.
+        Includes TF saturation (k1=1.5), length normalization (b=0.75), IDF term weighting,
+        and anchor boosts for exact CPT codes and clinical entity matches.
         """
         scores: dict[str, float] = {}
         if not self.guidelines or not query_tokens:
@@ -139,6 +160,10 @@ class VerificationService:
         N = len(self.guidelines)
         k1 = 1.5
         b = 0.75
+
+        # Check for 5-digit CPT codes in query and entity tokens
+        cpt_pattern = re.compile(r"\b\d{5}\b")
+        query_cpts = set(cpt_pattern.findall(" ".join(query_tokens))) | set(cpt_pattern.findall(" ".join(entity_tokens)))
 
         # Document lengths (in tokens)
         doc_lens = {
@@ -182,27 +207,48 @@ class VerificationService:
                 tf_norm = (tf * (k1 + 1)) / (tf + k1 * (1 - b + b * (d_len / avg_len)))
                 score += idf * tf_norm
 
-            # Significant entity anchor boost
-            entity_matches = sum(1 for t in entity_tokens if len(t) >= 4 and (t in topics_text or t in title_text or t in body_text))
-            score += entity_matches * 4.0
+            # Significant entity anchor boost (including 3-letter clinical acronyms like MRI, CMP, CBC)
+            entity_matches = sum(1 for t in entity_tokens if len(t) >= 3 and (t in topics_text or t in title_text or t in body_text))
+            title_topic_matches = sum(1 for t in entity_tokens if len(t) >= 3 and (t in topics_text or t in title_text))
+            score += entity_matches * 3.0 + title_topic_matches * 4.0
+
+            # Exact CPT code anchor boost
+            if query_cpts:
+                guide_cpts = set(cpt_pattern.findall(combined_text))
+                if query_cpts & guide_cpts:
+                    score += 15.0
 
             scores[gid] = score
 
-        # Normalize BM25 scores to 0.0 - 1.0
+        # Normalize BM25 scores with minimum ceiling to prevent noise inflation
         max_score = max(scores.values(), default=1.0)
-        if max_score > 0:
-            return {gid: round(s / max_score, 4) for gid, s in scores.items()}
-        return scores
+        normalizer = max(max_score, 8.0)
+        return {gid: round(min(1.0, s / normalizer), 4) for gid, s in scores.items()}
 
     def retrieve_hybrid_passages(self, entity: str, claim_text: str, k: int = 5) -> list[EvidencePassage]:
         """
         Ranked hybrid retrieval combining BM25 keyword matching and ChromaDB vector search.
-        Evaluates relevance threshold and marks passages used_in_decision vs discarded.
+        Evaluates relevance threshold, anatomical region compatibility, and procedure codes,
+        marking passages used_in_decision vs discarded.
         """
         query_text = f"{entity} {claim_text}".strip()
-        stop_words = {"mg", "ml", "oral", "tablet", "solution", "daily", "the", "and", "for", "with", "cpt", "dose", "unit"}
+        stop_words = {
+            "mg", "ml", "oral", "tablet", "solution", "daily", "the", "and", "for",
+            "with", "cpt", "dose", "unit", "iv", "intravenous", "infusion", "injection",
+            "capsule", "vial", "per"
+        }
         all_tokens = [t.lower() for t in re.findall(r"\w+", query_text) if len(t) >= 3 and t.lower() not in stop_words]
         entity_tokens = set(re.findall(r"\w+", entity.lower())) - stop_words
+
+        # Check for 5-digit CPT codes and anatomical regions in query
+        cpt_pattern = re.compile(r"\b\d{5}\b")
+        query_cpts = set(cpt_pattern.findall(query_text))
+
+        query_combined = f"{entity} {claim_text}".lower()
+        query_regions = {
+            region for region, keywords in ANATOMICAL_REGIONS.items()
+            if any(re.search(r"\b" + re.escape(kw) + r"\b", query_combined) for kw in keywords)
+        }
 
         # 1. Compute BM25 scores
         bm25_scores = self._compute_bm25_scores(all_tokens, entity_tokens)
@@ -243,18 +289,50 @@ class VerificationService:
             else:
                 composite = round(bm25, 3)
 
-            # Entity anchor check
+            guide_combined = f"{g['title']} {' '.join(g.get('topics', []))} {g['text']}".lower()
             topics_text = " ".join(g.get("topics", [])).lower()
             title_text = g["title"].lower()
-            has_entity_match = any(t in topics_text or t in title_text for t in entity_tokens if len(t) >= 4)
+            body_text = g["text"].lower()
+
+            # Check anatomical region compatibility
+            guide_regions = {
+                region for region, keywords in ANATOMICAL_REGIONS.items()
+                if any(re.search(r"\b" + re.escape(kw) + r"\b", guide_combined) for kw in keywords)
+            }
+            has_anatomical_conflict = bool(
+                query_regions and guide_regions and not (query_regions & guide_regions)
+            )
+
+            # Check CPT code compatibility
+            guide_cpts = set(cpt_pattern.findall(guide_combined))
+            has_cpt_conflict = bool(
+                query_cpts and guide_cpts and not (query_cpts & guide_cpts)
+            )
+
+            # Entity anchor check (supports 3+ letter tokens, e.g. mri, cmp, cbc)
+            has_topic_match = any(t in topics_text or t in title_text for t in entity_tokens if len(t) >= 3)
+            has_body_match = any(t in body_text for t in entity_tokens if len(t) >= 3)
+            has_entity_match = has_topic_match or has_body_match
 
             # Threshold and discard logic
-            if composite < self.relevance_threshold:
+            if has_cpt_conflict:
+                used = False
+                composite = round(min(composite, 0.20), 3)
+                discard_reason = f"CPT mismatch: guideline covers CPT {', '.join(sorted(guide_cpts))} instead of claim CPT {', '.join(sorted(query_cpts))}"
+            elif has_anatomical_conflict:
+                used = False
+                composite = round(min(composite, 0.20), 3)
+                discard_reason = f"Anatomical mismatch: guideline targets {', '.join(sorted(guide_regions))} while claim targets {', '.join(sorted(query_regions))}"
+            elif entity_tokens and not has_entity_match:
+                used = False
+                composite = round(min(composite, 0.20), 3)
+                discard_reason = f"Entity mismatch: guideline does not mention clinical entity '{entity}'"
+            elif composite < self.relevance_threshold:
                 used = False
                 discard_reason = f"Below relevance threshold {self.relevance_threshold:.2f} (score: {composite:.2f})"
-            elif entity_tokens and not has_entity_match and composite < 0.60:
+            elif entity_tokens and not has_topic_match and composite < 0.65:
                 used = False
-                discard_reason = "Entity mismatch: zero matching clinical topics in guideline"
+                discard_reason = "Entity mismatch: clinical entity only weakly mentioned in body text"
             else:
                 used = True
                 discard_reason = None
@@ -355,7 +433,11 @@ class VerificationService:
                 verification=verification,
                 passages=passages,
                 cost_details=anomaly_details,
-                abstention_decision=pre_abstention
+                abstention_decision=pre_abstention,
+                raw_model_verdict=None,
+                raw_model_support_score=0.0,
+                raw_model_reasoning=None,
+                raw_conflict_assessment=None,
             )
             verification.audit_trail_id = audit_trail.audit_id
 
@@ -368,8 +450,9 @@ class VerificationService:
 
         # 4. Formulate prompt for local Ollama LLM using usable passages
         passages_text = "\n\n".join(
-            f"[{idx}] Guideline: {s.title} ({s.source})\nText: {s.text}"
-            for idx, s in enumerate(usable_passages, start=1)
+            f"[Passage ID: {passage.passage_id}] Guideline: {passage.title} "
+            f"({passage.source})\nText: {passage.text}"
+            for passage in usable_passages
         )
 
         user_prompt = (
@@ -410,48 +493,57 @@ class VerificationService:
             raise ExtractionError(f"Verification service error: {e}")
 
         # 6. Parse model response
-        verdict, support_score, reasoning = self._parse_verification_output(raw_response)
+        raw_verdict, raw_support_score, raw_reasoning, conflict_assessment = (
+            self._parse_verification_response(raw_response)
+        )
 
         # 7. Post-evaluation Abstention Check (evaluating conflicting evidence or low confidence)
         post_abstention = abstention_service.evaluate(
             claim=claim,
             passages=passages,
             cost_details=anomaly_details,
-            model_verdict=verdict,
-            model_support_score=support_score,
-            model_reasoning=reasoning
+            model_verdict=raw_verdict,
+            model_support_score=raw_support_score,
+            model_reasoning=raw_reasoning,
+            model_conflict_assessment=conflict_assessment
         )
 
         if post_abstention.should_abstain:
-            verdict = VerificationVerdict.INSUFFICIENT_EVIDENCE
-            action = VerificationAction.ABSTAIN
-            support_score = 0.0
-            abstain_reason = post_abstention.reason
+            final_verdict = VerificationVerdict.INSUFFICIENT_EVIDENCE
+            final_action = VerificationAction.ABSTAIN
+            final_support_score = 0.0
+            final_abstain_reason = post_abstention.reason
         else:
-            action, abstain_reason = self._determine_action(verdict, support_score, has_cost_anomaly)
+            final_action, final_abstain_reason = self._determine_action(raw_verdict, raw_support_score, has_cost_anomaly)
+            final_verdict = raw_verdict
+            final_support_score = raw_support_score
 
         verification = VerificationResult(
             claim_id=claim.claim_id,
-            support_score=support_score,
-            verdict=verdict,
-            action=action,
-            reasoning=reasoning,
+            support_score=final_support_score,
+            verdict=final_verdict,
+            action=final_action,
+            reasoning=raw_reasoning,
             evidence_snippets=snippets,
             passages_considered=passages,
             cost_anomaly_flag=has_cost_anomaly,
             anomaly_details=anomaly_details,
             location=claim.location,
-            abstain_reason=abstain_reason,
+            abstain_reason=final_abstain_reason,
             verified_at=datetime.now(timezone.utc)
         )
 
-        # 8. Record and persist complete AuditTrail
+        # 8. Record and persist complete AuditTrail (preserving raw model verdict and policy overrides)
         audit_trail = audit_service.record_full_audit(
             claim=claim,
             verification=verification,
             passages=passages,
             cost_details=anomaly_details,
-            abstention_decision=post_abstention
+            abstention_decision=post_abstention,
+            raw_model_verdict=raw_verdict,
+            raw_model_support_score=raw_support_score,
+            raw_model_reasoning=raw_reasoning,
+            raw_conflict_assessment=conflict_assessment,
         )
         verification.audit_trail_id = audit_trail.audit_id
 
@@ -462,8 +554,11 @@ class VerificationService:
 
         return verification
 
-    def _parse_verification_output(self, raw_text: str) -> tuple[VerificationVerdict, float, str]:
-        """Parse structured verdict, support score, and reasoning from model JSON output."""
+    def _parse_verification_response(
+        self,
+        raw_text: str
+    ) -> tuple[VerificationVerdict, float, str, Optional[dict[str, Any]]]:
+        """Parse the verdict, support score, reasoning, and optional conflict assessment."""
         cleaned = raw_text.strip()
         if cleaned.startswith("```"):
             cleaned = re.sub(r"^```(?:json)?\s*", "", cleaned)
@@ -485,7 +580,8 @@ class VerificationService:
             return (
                 VerificationVerdict.PARTIALLY_SUPPORTED,
                 0.50,
-                "Verification output was non-standard; assigned default partially supported verdict."
+                "Verification output was non-standard; assigned default partially supported verdict.",
+                None
             )
 
         verdict_str = str(parsed.get("verdict") or "partially_supported").lower().strip()
@@ -508,6 +604,17 @@ class VerificationService:
             score = defaults.get(verdict, 0.50)
 
         reasoning = str(parsed.get("reasoning") or "Evidence evaluated against clinical guidelines.").strip()
+        conflict_assessment = parsed.get("conflict_assessment")
+        if not isinstance(conflict_assessment, dict):
+            conflict_assessment = None
+        return verdict, score, reasoning, conflict_assessment
+
+    def _parse_verification_output(
+        self,
+        raw_text: str
+    ) -> tuple[VerificationVerdict, float, str]:
+        """Backward-compatible parser for the public verdict fields."""
+        verdict, score, reasoning, _ = self._parse_verification_response(raw_text)
         return verdict, score, reasoning
 
     def _determine_action(

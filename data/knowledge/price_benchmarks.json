@@ -130,5 +130,49 @@
     "unit": "per 6-tablet pack",
     "source": "NADAC & Retail Generic Pricing Formulary",
     "cpt_code": null
+  },
+  {
+    "entity": "MRI Brain without contrast (CPT 70551)",
+    "keywords": ["mri brain", "brain mri", "70551", "head mri", "cranial mri", "neuroimaging"],
+    "category": "imaging",
+    "typical_min": 450.00,
+    "typical_max": 1400.00,
+    "currency": "USD",
+    "unit": "per scan",
+    "source": "CMS Outpatient Prospective Payment System (OPPS) & Fair Health Benchmark 2026",
+    "cpt_code": "70551"
+  },
+  {
+    "entity": "Routine Venipuncture (CPT 36415)",
+    "keywords": ["venipuncture", "routine venipuncture", "36415", "blood draw", "phlebotomy"],
+    "category": "laboratory",
+    "typical_min": 5.00,
+    "typical_max": 25.00,
+    "currency": "USD",
+    "unit": "per collection",
+    "source": "CMS Clinical Laboratory Fee Schedule (CLFS) 2026",
+    "cpt_code": "36415"
+  },
+  {
+    "entity": "Chest X-Ray 2 Views (CPT 71046)",
+    "keywords": ["chest x-ray", "chest xray", "71046", "radiography", "chest radiograph"],
+    "category": "imaging",
+    "typical_min": 40.00,
+    "typical_max": 190.00,
+    "currency": "USD",
+    "unit": "per study",
+    "source": "CMS Medicare Physician Fee Schedule (MPFS) 2026",
+    "cpt_code": "71046"
+  },
+  {
+    "entity": "Complete Blood Count with Differential (CPT 85025)",
+    "keywords": ["cbc", "complete blood count", "85025", "hemogram", "blood count"],
+    "category": "laboratory",
+    "typical_min": 10.00,
+    "typical_max": 45.00,
+    "currency": "USD",
+    "unit": "per test",
+    "source": "CMS Clinical Laboratory Fee Schedule (CLFS) 2026",
+    "cpt_code": "85025"
   }
 ]

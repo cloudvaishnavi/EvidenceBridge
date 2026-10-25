@@ -1,9 +1,24 @@
-import React, { useState, useEffect } from 'react'
-import { NavLink, Outlet } from 'react-router-dom'
+import { useState, useEffect, useRef } from 'react'
+import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
 import { getHealth } from '../api/client'
 import type { HealthResponse } from '../types'
+import { useAuth } from '../context/AuthContext'
+import { useVoice } from '../context/VoiceContext'
+import { AuthModal } from './AuthModal'
+import { VoiceAssistant } from './VoiceAssistant'
+import Logo, { EbMark } from './Logo'
 
 export default function Layout() {
+  const { user, isAuthenticated, logout, demoLogin } = useAuth()
+  const { setIsOpen: setVoiceOpen, setIsEnabled: setIsVoiceEnabled } = useVoice()
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [authModalOpen, setAuthModalOpen] = useState(false)
+  const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login')
+  const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
+  const [moreDropdownOpen, setMoreDropdownOpen] = useState(false)
+  const moreRef = useRef<HTMLDivElement>(null)
+
   const [health, setHealth] = useState<{
     loading: boolean
     ok: boolean
@@ -24,53 +39,163 @@ export default function Layout() {
     }
   }, [])
 
+  // Close menus on page navigation
+  useEffect(() => {
+    setMobileMenuOpen(false)
+    setMoreDropdownOpen(false)
+  }, [location.pathname])
+
+  // Click outside to close 'More' dropdown
+  useEffect(() => {
+    function handleClickOutside(event: MouseEvent) {
+      if (moreRef.current && !moreRef.current.contains(event.target as Node)) {
+        setMoreDropdownOpen(false)
+      }
+    }
+    document.addEventListener('mousedown', handleClickOutside)
+    return () => document.removeEventListener('mousedown', handleClickOutside)
+  }, [])
+
   const navLinkClasses = ({ isActive }: { isActive: boolean }) =>
-    `inline-flex items-center px-3 py-2 text-sm font-medium rounded-md transition-colors ${
+    `inline-flex items-center px-2 py-1 text-xs font-semibold rounded-lg transition-colors whitespace-nowrap ${
       isActive
-        ? 'bg-sky-50 text-sky-700 font-semibold'
+        ? 'bg-sky-50 text-sky-700 font-bold border border-sky-200 shadow-xs'
         : 'text-slate-600 hover:text-slate-900 hover:bg-slate-100'
     }`
 
+  const handleSignOut = () => {
+    logout()
+    navigate('/')
+  }
+
+  const getUserInitials = (name: string) => {
+    return name
+      .split(' ')
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((part) => part[0]?.toUpperCase())
+      .join('')
+  }
+
   return (
-    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900">
+    <div className="min-h-screen flex flex-col bg-slate-50 text-slate-900 font-sans w-full max-w-full overflow-x-hidden">
       {/* Top Header */}
-      <header className="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
-        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
-          <div className="flex justify-between items-center h-16">
-            {/* Logo and Brand */}
-            <div className="flex items-center gap-6">
-              <NavLink to="/" className="flex items-center gap-2 group">
-                <div className="w-9 h-9 rounded-lg bg-sky-600 flex items-center justify-center text-white font-bold text-lg shadow-sm group-hover:bg-sky-700 transition-colors">
-                  EB
-                </div>
-                <div>
-                  <div className="font-bold text-lg text-slate-900 tracking-tight leading-none group-hover:text-sky-600 transition-colors">
-                    EvidenceBridge
-                  </div>
-                  <div className="text-[11px] text-slate-500 font-medium">
-                    Evidence-Auditing &amp; Cost-Anomaly Engine
-                  </div>
-                </div>
+      <header className="bg-white/95 backdrop-blur-sm border-b border-slate-200 sticky top-0 z-30 shadow-xs w-full">
+        <div className="w-full max-w-7xl mx-auto px-2 sm:px-4 lg:px-6">
+          <div className="flex items-center justify-between h-14 gap-1.5 sm:gap-3">
+            {/* Left Cluster: Logo + Navigation Links */}
+            <div className="flex items-center gap-1 sm:gap-2.5 min-w-0 flex-1">
+              {/* Logo */}
+              <NavLink to="/welcome" className="flex items-center flex-shrink-0 mr-1 sm:mr-2">
+                <Logo size="sm" showText={true} />
               </NavLink>
 
-              {/* Navigation Links */}
-              <nav className="hidden md:flex space-x-1 pl-4 border-l border-slate-200">
-                <NavLink to="/" className={navLinkClasses}>
-                  Audit / Extract
+              {/* Full Desktop Navigation (large screens >= 1200px) */}
+              <nav className="hidden xl:flex items-center gap-0.5 2xl:gap-1 min-w-0">
+                <NavLink to="/audit" className={navLinkClasses} title="Audit a healthcare claim or hospital bill">
+                  Audit Claim
                 </NavLink>
-                <NavLink to="/claims" className={navLinkClasses}>
+                <NavLink to="/claims" className={navLinkClasses} title="Browse verified claims history">
                   Claims Explorer
                 </NavLink>
-                <NavLink to="/trust-density" className={navLinkClasses}>
-                  Hyperlocal Trust Density
+                <NavLink to="/hospitals" className={navLinkClasses} title="Find nearby hospitals, fair costs & trusted facilities">
+                  Hospitals
                 </NavLink>
+                <NavLink to="/insights" className={navLinkClasses} title="Interactive statistics and summary charts">
+                  Insights
+                </NavLink>
+                <NavLink to="/trust-density" className={navLinkClasses} title="Regional healthcare trust indicators">
+                  Regional Trust
+                </NavLink>
+                <NavLink to="/evaluation" className={navLinkClasses} title="Controlled clinical validation benchmark suite">
+                  Evaluation
+                </NavLink>
+                <NavLink to="/community" className={navLinkClasses} title="Real patient stories & billing recovery guidance">
+                  Stories
+                </NavLink>
+                <NavLink to="/welcome" className={navLinkClasses} title="Platform overview and architecture">
+                  Overview
+                </NavLink>
+              </nav>
+
+              {/* Medium Screen Navigation (md to xl: 768px - 1199px) */}
+              <nav className="hidden md:flex xl:hidden items-center gap-0.5 min-w-0">
+                <NavLink to="/audit" className={navLinkClasses}>
+                  Audit
+                </NavLink>
+                <NavLink to="/claims" className={navLinkClasses}>
+                  Claims
+                </NavLink>
+                <NavLink to="/hospitals" className={navLinkClasses}>
+                  Hospitals
+                </NavLink>
+                <NavLink to="/insights" className={navLinkClasses}>
+                  Insights
+                </NavLink>
+
+                {/* More Dropdown for secondary pages */}
+                <div className="relative" ref={moreRef}>
+                  <button
+                    type="button"
+                    onClick={() => setMoreDropdownOpen((prev) => !prev)}
+                    className="inline-flex items-center gap-1 px-2 py-1 text-xs font-semibold rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100 transition-colors"
+                  >
+                    <span>More</span>
+                    <span className="text-[10px]">▾</span>
+                  </button>
+                  {moreDropdownOpen && (
+                    <div className="absolute left-0 mt-1 w-44 bg-white rounded-xl shadow-lg border border-slate-200 py-1.5 z-40 animate-in fade-in zoom-in-95 duration-100">
+                      <NavLink
+                        to="/trust-density"
+                        className={({ isActive }) =>
+                          `block px-3 py-1.5 text-xs font-semibold transition-colors ${
+                            isActive ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-50'
+                          }`
+                        }
+                      >
+                        Regional Trust
+                      </NavLink>
+                      <NavLink
+                        to="/evaluation"
+                        className={({ isActive }) =>
+                          `block px-3 py-1.5 text-xs font-semibold transition-colors ${
+                            isActive ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-50'
+                          }`
+                        }
+                      >
+                        Evaluation
+                      </NavLink>
+                      <NavLink
+                        to="/community"
+                        className={({ isActive }) =>
+                          `block px-3 py-1.5 text-xs font-semibold transition-colors ${
+                            isActive ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-50'
+                          }`
+                        }
+                      >
+                        Community Stories
+                      </NavLink>
+                      <NavLink
+                        to="/welcome"
+                        className={({ isActive }) =>
+                          `block px-3 py-1.5 text-xs font-semibold transition-colors ${
+                            isActive ? 'bg-sky-50 text-sky-700' : 'text-slate-700 hover:bg-slate-50'
+                          }`
+                        }
+                      >
+                        Overview
+                      </NavLink>
+                    </div>
+                  )}
+                </div>
               </nav>
             </div>
 
-            {/* Right Health Indicator */}
-            <div className="flex items-center gap-3">
+            {/* Right Cluster: Local Engine, Voice AI, User Profile, Sign Out */}
+            <div className="flex-shrink-0 flex items-center gap-1.5 sm:gap-2">
+              {/* Backend Health Pill */}
               <div
-                className="flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-medium border bg-slate-50 border-slate-200"
+                className="hidden 2xl:flex items-center gap-1.5 px-2 py-1 rounded-full text-xs font-medium border bg-slate-50 border-slate-200"
                 title={
                   health.loading
                     ? 'Checking backend status...'
@@ -80,7 +205,7 @@ export default function Layout() {
                 }
               >
                 <span
-                  className={`w-2.5 h-2.5 rounded-full ${
+                  className={`w-2 h-2 rounded-full ${
                     health.loading
                       ? 'bg-amber-400 animate-pulse'
                       : health.ok
@@ -88,50 +213,179 @@ export default function Layout() {
                       : 'bg-rose-500'
                   }`}
                 />
-                <span className="hidden sm:inline text-slate-700">
+                <span className="text-slate-600 text-[11px] whitespace-nowrap">
                   {health.loading
-                    ? 'Checking...'
+                    ? 'Connecting...'
                     : health.ok
-                    ? 'Backend Online'
+                    ? 'Local Engine Active'
                     : 'Backend Offline'}
                 </span>
               </div>
+
+              {/* Voice AI Header Button */}
+              {isAuthenticated && (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsVoiceEnabled(true)
+                    setVoiceOpen(true)
+                  }}
+                  className="flex items-center gap-1 px-2 py-1 rounded-lg border border-sky-200 bg-sky-50 hover:bg-sky-100 text-xs font-bold text-sky-800 transition-colors shadow-xs"
+                  title="Open AI Voice Assistant (English / ಕನ್ನಡ)"
+                >
+                  <span className="text-xs leading-none">🎙️</span>
+                  <span className="hidden sm:inline text-xs">Voice AI</span>
+                </button>
+              )}
+
+              {/* User Authentication Pill & Always-Visible Sign Out */}
+              {isAuthenticated && user ? (
+                <div className="flex items-center gap-1.5">
+                  <div
+                    className="flex items-center gap-1.5 py-0.5 px-1.5 sm:px-2 rounded-lg bg-slate-50 border border-slate-200 shadow-2xs"
+                    title={`${user.name} (${user.role})`}
+                  >
+                    <div className="w-6 h-6 rounded-full bg-clinical-600 text-white font-bold text-[10px] flex items-center justify-center flex-shrink-0">
+                      {getUserInitials(user.name) || 'MD'}
+                    </div>
+                    <div className="text-left hidden sm:block max-w-[110px]">
+                      <div className="text-xs font-bold text-slate-800 leading-tight truncate">
+                        {user.name}
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Sign Out Button - Always visible in the top bar */}
+                  <button
+                    type="button"
+                    onClick={handleSignOut}
+                    className="text-xs font-semibold text-rose-600 hover:text-rose-700 px-2 py-1 rounded-lg hover:bg-rose-50 border border-transparent hover:border-rose-200 transition-colors whitespace-nowrap"
+                    title="Sign Out of Auditor Session"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              ) : (
+                <div className="flex items-center gap-1 sm:gap-1.5">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthModalMode('login')
+                      setAuthModalOpen(true)
+                    }}
+                    className="text-xs font-semibold text-slate-700 hover:text-slate-900 px-2 py-1 rounded-lg hover:bg-slate-100 transition-colors"
+                  >
+                    Sign In
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setAuthModalMode('signup')
+                      setAuthModalOpen(true)
+                    }}
+                    className="hidden sm:inline-flex text-xs font-semibold text-sky-700 bg-sky-50 hover:bg-sky-100 border border-sky-200 px-2 py-1 rounded-lg transition-colors"
+                  >
+                    Sign Up
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => demoLogin()}
+                    className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-xs transition-colors whitespace-nowrap"
+                  >
+                    <span>⚡ Demo</span>
+                  </button>
+                </div>
+              )}
+
+              {/* Mobile Menu Hamburger (screens < md) */}
+              <button
+                type="button"
+                onClick={() => setMobileMenuOpen((prev) => !prev)}
+                className="md:hidden p-1.5 rounded-lg text-slate-600 hover:text-slate-900 hover:bg-slate-100"
+                aria-label="Toggle Navigation Menu"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  {mobileMenuOpen ? (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+                  ) : (
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 6h16M4 12h16M4 18h16" />
+                  )}
+                </svg>
+              </button>
             </div>
           </div>
         </div>
 
-        {/* Mobile Nav */}
-        <div className="md:hidden border-t border-slate-100 px-4 py-2 flex space-x-2 bg-slate-50">
-          <NavLink to="/" className={navLinkClasses}>
-            Audit / Extract
-          </NavLink>
-          <NavLink to="/claims" className={navLinkClasses}>
-            Claims
-          </NavLink>
-          <NavLink to="/trust-density" className={navLinkClasses}>
-            Trust Density
-          </NavLink>
-        </div>
+        {/* Mobile Navigation Dropdown (< md screens) */}
+        {mobileMenuOpen && (
+          <div className="md:hidden border-t border-slate-200 bg-white px-3 py-2 space-y-1 shadow-lg animate-in slide-in-from-top-2 duration-150">
+            <NavLink to="/audit" className={navLinkClasses}>
+              Audit Claim
+            </NavLink>
+            <NavLink to="/claims" className={navLinkClasses}>
+              Claims Explorer
+            </NavLink>
+            <NavLink to="/hospitals" className={navLinkClasses}>
+              Hospitals
+            </NavLink>
+            <NavLink to="/insights" className={navLinkClasses}>
+              Insights
+            </NavLink>
+            <NavLink to="/trust-density" className={navLinkClasses}>
+              Regional Trust
+            </NavLink>
+            <NavLink to="/evaluation" className={navLinkClasses}>
+              Evaluation
+            </NavLink>
+            <NavLink to="/community" className={navLinkClasses}>
+              Community Stories
+            </NavLink>
+            <NavLink to="/welcome" className={navLinkClasses}>
+              Overview
+            </NavLink>
+          </div>
+        )}
       </header>
 
-      {/* Main Content */}
-      <main className="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-8">
+      {/* Main Content Area */}
+      <main className="flex-1 max-w-7xl w-full mx-auto px-3 sm:px-6 lg:px-8 py-6 sm:py-8">
         <Outlet />
       </main>
 
-      {/* Footer */}
-      <footer className="bg-white border-t border-slate-200 py-4 text-center text-xs text-slate-500">
-        <div className="max-w-7xl mx-auto px-4 flex flex-col sm:flex-row justify-between items-center gap-2">
-          <div>EvidenceBridge &copy; 2026 &middot; Local-First Healthcare Auditing</div>
-          <div className="flex items-center gap-3 text-slate-400">
-            <span>Layers 1&ndash;5 Complete</span>
+      {/* Trust-Focused Medical Footer */}
+      <footer className="bg-white border-t border-slate-200 py-6 text-xs text-slate-500 w-full">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 flex flex-col md:flex-row justify-between items-center gap-3">
+          <div className="flex items-center gap-2">
+            <EbMark size={20} />
+            <span className="font-bold text-slate-700">EvidenceBridge</span>
             <span>&bull;</span>
-            <span>Ollama + ChromaDB + MongoDB</span>
+            <span>Local-First Clinical Evidence &amp; Medical Price Auditing</span>
+          </div>
+
+          <div className="flex items-center gap-4 text-slate-400 text-[11px] flex-wrap justify-center">
+            <span className="flex items-center gap-1">
+              <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />
+              100% Offline Engine
+            </span>
             <span>&bull;</span>
-            <span>Apache-2.0</span>
+            <span>Zero PHI Cloud Leakage</span>
+            <span>&bull;</span>
+            <span>7-Stage Traceable Graph</span>
+            <span>&bull;</span>
+            <span>Layers 1&ndash;6 Complete</span>
           </div>
         </div>
       </footer>
+
+      {/* Global Auth Modal */}
+      <AuthModal
+        isOpen={authModalOpen}
+        initialMode={authModalMode}
+        onClose={() => setAuthModalOpen(false)}
+      />
+
+      {/* Floating AI Voice Assistant */}
+      <VoiceAssistant />
     </div>
   )
 }

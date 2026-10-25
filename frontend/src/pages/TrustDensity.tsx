@@ -95,20 +95,22 @@ export default function TrustDensity() {
   }
 
   return (
-    <div className="space-y-8">
+    <div className="space-y-8 max-w-5xl mx-auto">
       {/* Page Header */}
       <div>
-        <h1 className="text-2xl font-bold text-slate-900">
-          Hyperlocal Trust Density
+        <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-800 text-[11px] font-bold uppercase tracking-wider mb-1.5 border border-sky-200">
+          Geographic Analytics
+        </div>
+        <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
+          Regional Hospital Reliability Score
         </h1>
-        <p className="text-xs text-slate-500 mt-1 max-w-2xl">
-          Aggregates clinical guideline adherence, cost anomaly frequency, and
-          recency-decayed claim activity into geographic reliability scores.
+        <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-2xl leading-relaxed">
+          How reliable are billing and clinical practices in this geographic area? We monitor clinical guideline adherence, pricing anomaly rates, and audit volume across metropolitan areas.
         </p>
       </div>
 
-      {/* Search Bar & Quick Switcher */}
-      <div className="bg-white rounded-xl border border-slate-200 p-6 shadow-sm">
+      {/* Search Bar & Metro Switcher */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-card">
         <form
           onSubmit={handleSearchSubmit}
           className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3"
@@ -118,30 +120,30 @@ export default function TrustDensity() {
               type="text"
               value={locationKey}
               onChange={(e) => setLocationKey(e.target.value)}
-              placeholder="Enter canonical key, e.g. 'houston_tx', 'chicago_il', 'atlanta_ga'..."
-              className="w-full px-4 py-2.5 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono text-slate-800 placeholder:text-slate-400"
+              placeholder="Enter canonical key, e.g. 'houston_tx', 'chicago_il', 'cleveland_oh'..."
+              className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono text-slate-800 placeholder:text-slate-400 bg-slate-50/50"
             />
           </div>
 
           <button
             type="submit"
             disabled={loadingSelected || !locationKey.trim()}
-            className="px-6 py-2.5 rounded-lg bg-sky-600 text-white text-sm font-bold hover:bg-sky-700 transition-colors shadow-sm disabled:opacity-50"
+            className="px-6 py-2.5 rounded-xl bg-sky-600 text-white text-xs sm:text-sm font-bold hover:bg-sky-700 transition-colors shadow-md disabled:opacity-50"
           >
-            {loadingSelected ? 'Searching...' : 'Audit Locality'}
+            {loadingSelected ? 'Auditing Locality...' : 'Audit Metro'}
           </button>
         </form>
 
         {/* Quick Suggestion Pills */}
         <div className="flex items-center gap-2 mt-4 text-xs text-slate-500 flex-wrap">
-          <span className="font-medium">Common Metros:</span>
+          <span className="font-semibold text-slate-700">Quick Select:</span>
           {['houston_tx', 'chicago_il', 'atlanta_ga', 'cleveland_oh', 'denver_co'].map(
             (k) => (
               <button
                 key={k}
                 type="button"
                 onClick={() => handleSelectLocation(k)}
-                className="px-2.5 py-1 rounded-md bg-slate-100 hover:bg-slate-200 text-slate-700 font-mono text-xs transition-colors"
+                className="px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-mono text-xs font-semibold transition-colors"
               >
                 {k}
               </button>
@@ -152,14 +154,14 @@ export default function TrustDensity() {
 
       {/* Selected Location Detail Display */}
       {loadingSelected && (
-        <div className="bg-white rounded-xl border border-slate-200 p-8 text-center animate-pulse">
-          <div className="h-6 bg-slate-200 rounded w-1/3 mx-auto mb-3" />
+        <div className="bg-white rounded-2xl border border-slate-200 p-8 text-center animate-pulse space-y-3">
+          <div className="h-6 bg-slate-200 rounded w-1/3 mx-auto" />
           <div className="h-4 bg-slate-200 rounded w-1/2 mx-auto" />
         </div>
       )}
 
       {error && !loadingSelected && (
-        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-sm">
+        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs sm:text-sm">
           <strong>Notice:</strong> {error}
         </div>
       )}
@@ -174,34 +176,34 @@ export default function TrustDensity() {
       )}
 
       {/* All Tracked Localities Table */}
-      <div className="bg-white rounded-xl border border-slate-200 overflow-hidden shadow-sm">
+      <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-card">
         <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
           <div>
-            <h2 className="text-sm font-bold text-slate-900">
-              Tracked Geographic Localities ({locations.length})
+            <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wider">
+              Tracked Metropolitan Localities ({locations.length})
             </h2>
-            <p className="text-xs text-slate-500 mt-0.5">
-              Ranked overview of metropolitan reliability &amp; cost markup risk
+            <p className="text-[11px] text-slate-500 mt-0.5">
+              Comparative reliability index and price anomaly rates across regions
             </p>
           </div>
 
           {/* Sort Switcher */}
-          <div className="flex items-center gap-1 bg-slate-200 p-1 rounded-lg">
+          <div className="flex items-center gap-1 bg-slate-200/80 p-1 rounded-xl">
             <button
               type="button"
               onClick={() => setSortBy('density_score')}
-              className={`px-3 py-1 text-xs font-semibold rounded-md transition-colors ${
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
                 sortBy === 'density_score'
                   ? 'bg-white text-slate-900 shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
-              Highest Density
+              Highest Reliability
             </button>
             <button
               type="button"
               onClick={() => setSortBy('volume')}
-              className={`px-3 py-1 text-xs font-semibold rounded-md transition-colors ${
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition-colors ${
                 sortBy === 'volume'
                   ? 'bg-white text-slate-900 shadow-sm'
                   : 'text-slate-600 hover:text-slate-900'
@@ -220,24 +222,24 @@ export default function TrustDensity() {
           <div className="p-12 text-center">
             <div className="text-3xl mb-2">📍</div>
             <h3 className="text-base font-bold text-slate-800">
-              No Geographic Data Seeded
+              No Geographic Data Seeded Yet
             </h3>
             <p className="text-xs text-slate-500 mt-1 max-w-md mx-auto">
-              Run <code className="bg-slate-100 px-1 py-0.5 rounded font-mono">python scripts/seed_data.py --verify</code> or submit claims from the Audit page to initialize hyperlocal scores.
+              Submit claims via the Audit workspace to automatically compute regional trust scores.
             </p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50/70 border-b border-slate-200 text-slate-500 font-semibold uppercase tracking-wider text-[11px]">
+              <thead className="bg-slate-50/70 border-b border-slate-200 text-slate-500 font-bold uppercase tracking-wider text-[11px]">
                 <tr>
-                  <th className="px-6 py-3">Locality</th>
-                  <th className="px-6 py-3">Trust Tier</th>
-                  <th className="px-6 py-3">Density Score</th>
-                  <th className="px-6 py-3 text-center">Total Claims</th>
-                  <th className="px-6 py-3 text-center">Verified</th>
-                  <th className="px-6 py-3 text-center">Anomaly Rate</th>
-                  <th className="px-6 py-3 text-right">Action</th>
+                  <th className="px-6 py-3.5">Metropolitan Area</th>
+                  <th className="px-6 py-3.5">Reliability Tier</th>
+                  <th className="px-6 py-3.5">Reliability Score</th>
+                  <th className="px-6 py-3.5 text-center">Total Claims</th>
+                  <th className="px-6 py-3.5 text-center">Audited</th>
+                  <th className="px-6 py-3.5 text-center">Price Alert Rate</th>
+                  <th className="px-6 py-3.5 text-right">Action</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -251,11 +253,11 @@ export default function TrustDensity() {
                       key={loc.location_key}
                       onClick={() => handleSelectLocation(loc.location_key)}
                       className={`hover:bg-slate-50 cursor-pointer transition-colors ${
-                        isSelected ? 'bg-sky-50/60 font-medium' : ''
+                        isSelected ? 'bg-sky-50/70 font-semibold' : ''
                       }`}
                     >
-                      <td className="px-6 py-3.5">
-                        <div className="font-bold text-slate-900">
+                      <td className="px-6 py-4">
+                        <div className="font-bold text-slate-900 text-sm">
                           {loc.city}
                           {loc.state_or_region ? `, ${loc.state_or_region}` : ''}
                         </div>
@@ -264,14 +266,14 @@ export default function TrustDensity() {
                         </div>
                       </td>
 
-                      <td className="px-6 py-3.5">
+                      <td className="px-6 py-4">
                         <TrustTierBadge tier={loc.trust_tier} />
                       </td>
 
-                      <td className="px-6 py-3.5">
+                      <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
-                          <span className="font-mono font-bold text-slate-800 w-10">
-                            {loc.density_score.toFixed(2)}
+                          <span className="font-mono font-bold text-slate-900 w-12 text-xs">
+                            {loc.density_score.toFixed(3)}
                           </span>
                           <div className="w-20 bg-slate-100 h-2 rounded-full overflow-hidden">
                             <div
@@ -290,28 +292,28 @@ export default function TrustDensity() {
                         </div>
                       </td>
 
-                      <td className="px-6 py-3.5 text-center font-mono text-slate-700">
+                      <td className="px-6 py-4 text-center font-mono text-slate-700">
                         {loc.total_claims}
                       </td>
 
-                      <td className="px-6 py-3.5 text-center font-mono text-slate-700">
+                      <td className="px-6 py-4 text-center font-mono text-slate-700">
                         {loc.verified_claims}
                       </td>
 
-                      <td className="px-6 py-3.5 text-center font-mono">
+                      <td className="px-6 py-4 text-center font-mono">
                         <span
-                          className={
+                          className={`font-bold ${
                             loc.cost_anomaly_rate > 0.3
-                              ? 'text-rose-600 font-bold'
-                              : 'text-slate-600'
-                          }
+                              ? 'text-rose-600'
+                              : 'text-slate-700'
+                          }`}
                         >
                           {anomalyPct}%
                         </span>
                       </td>
 
-                      <td className="px-6 py-3.5 text-right">
-                        <span className="text-xs font-semibold text-sky-600 hover:text-sky-800">
+                      <td className="px-6 py-4 text-right">
+                        <span className="text-xs font-bold text-sky-600 hover:text-sky-800">
                           Inspect &rarr;
                         </span>
                       </td>

@@ -64,3 +64,10 @@ frontend/node_modules/
 frontend/dist/
 .vite/
 
+# Local debugging and temporary test scripts
+scratch/
+
+# Python cache and test output
+__pycache__/
+.pytest_cache/
+.coverage

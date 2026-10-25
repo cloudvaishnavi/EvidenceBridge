@@ -287,8 +287,48 @@ class TestTrustDensityEdgeCases:
         )
 
         assert metrics.abstained_count == 4
-        # With 0 conclusive evaluations, support_ratio falls to default 0.5
-        assert metrics.support_ratio == 0.5
+        assert metrics.supported_count == 0
+        assert metrics.contradicted_count == 0
+        assert metrics.cost_anomaly_count == 0
+        # With 0 conclusive evaluations, support_ratio must be strictly 0.0 (never 0.5)
+        assert metrics.support_ratio == 0.0
+        # Narrative must not claim billing anomalies when anomaly rate is 0.0%
+        assert "occasional billing anomalies" not in insight.summary_text
+        assert "zero detected billing anomalies" in insight.summary_text
+        assert "inconclusive" in insight.summary_text.lower()
+
+    def test_houston_all_abstained_clean_billing(self):
+        """Simulate Houston scenario: 4 audited claims, all abstained, zero anomalies."""
+        claims = [_make_claim(f"hou_{i}", entity="MRI", city="Houston", state="TX") for i in range(4)]
+        verifications = [
+            _make_verification(
+                f"hou_{i}",
+                VerificationVerdict.INSUFFICIENT_EVIDENCE,
+                VerificationAction.ABSTAIN,
+                support_score=0.0,
+                cost_anomaly=False,
+            )
+            for i in range(4)
+        ]
+
+        metrics, insight = self.svc.calculate_metrics(
+            "houston_tx", "Houston", "TX", claims, verifications
+        )
+
+        assert metrics.total_claims == 4
+        assert metrics.verified_claims == 4
+        assert metrics.supported_count == 0
+        assert metrics.flagged_count == 0
+        assert metrics.contradicted_count == 0
+        assert metrics.abstained_count == 4
+        assert metrics.cost_anomaly_count == 0
+        assert metrics.cost_anomaly_rate == 0.0
+        # Support ratio is strictly 0.0 when supported is 0
+        assert metrics.support_ratio == 0.0
+        # Narrative is consistent with 0 anomalies and inconclusive guideline support
+        assert "zero detected billing anomalies" in insight.summary_text
+        assert "occasional billing anomalies" not in insight.summary_text
+        assert "inconclusive" in insight.summary_text.lower()
 
 
 # ==============================================================================
@@ -463,3 +503,229 @@ class TestTrustDensitySchemas:
         assert TrustTier.LOW.value == "low"
         assert TrustTier.CRITICAL_ALERT.value == "critical_alert"
         assert TrustTier.INSUFFICIENT_DATA.value == "insufficient_data"
+
+
+# ==============================================================================
+# Hand-Calculated Mathematical & Small-Sample Hardening Tests (Step 5)
+# ==============================================================================
+
+class TestHandCalculatedTrustDensity:
+    """
+    Exhaustive mathematical verification of Trust Density formulas using hand-calculated
+    ground truth values. Validates exact numerical consistency, time-decay constants,
+    tier threshold cutoffs, and small-sample / abstention narrative transparency.
+    """
+
+    def setup_method(self):
+        self.svc = TrustDensityService(
+            support_weight=0.45,
+            anomaly_weight=0.35,
+            volume_weight=0.20,
+            min_volume=5,
+            time_decay_days=45.0,
+        )
+
+    def test_hand_calculated_synthetic_4_claims_moderate(self):
+        """
+        Hand-calculated scenario with 4 contemporaneous claims (t = now):
+        - Claim 0: SUPPORTED (ACCEPT), no cost anomaly
+        - Claim 1: SUPPORTED (ACCEPT), no cost anomaly
+        - Claim 2: PARTIALLY_SUPPORTED (FLAG), no cost anomaly
+        - Claim 3: CONTRADICTED (FLAG), cost anomaly = True
+
+        Hand calculation:
+        - total_claims = 4, verified_claims = 4
+        - supported = 2, partially_supported = 1, contradicted = 1
+        - flagged_count = 2, abstained_count = 0, cost_anomaly_count = 1
+        - eval_conclusive = 2 + 1 + 1 = 4
+        - support_ratio = (2 + 0.5 * 1) / 4 = 2.5 / 4 = 0.6250
+        - cost_anomaly_rate = 1 / 4 = 0.2500
+        - recency_volume = 1.0 + 1.0 + 1.0 + 1.0 = 4.000
+        - volume_factor = min(1.0, 4.0 / 5) = 0.8000
+        - raw_density = 0.45 * 0.625 + 0.35 * (1 - 0.25) + 0.20 * 0.80
+                      = 0.28125 + 0.2625 + 0.1600 = 0.70375
+        - density_score = round(0.70375, 4) = 0.7037 (Python IEEE-754 round-to-even / float representation)
+        - trust_tier: 0.7037 is in [0.50, 0.75) -> MODERATE
+        """
+        now = datetime.now(timezone.utc)
+        claims = [_make_claim(f"syn_{i}", timestamp=now) for i in range(4)]
+        verifications = [
+            _make_verification("syn_0", VerificationVerdict.SUPPORTED, VerificationAction.ACCEPT, cost_anomaly=False),
+            _make_verification("syn_1", VerificationVerdict.SUPPORTED, VerificationAction.ACCEPT, cost_anomaly=False),
+            _make_verification("syn_2", VerificationVerdict.PARTIALLY_SUPPORTED, VerificationAction.FLAG, cost_anomaly=False),
+            _make_verification("syn_3", VerificationVerdict.CONTRADICTED, VerificationAction.FLAG, cost_anomaly=True),
+        ]
+
+        metrics, insight = self.svc.calculate_metrics("austin_tx", "Austin", "TX", claims, verifications)
+
+        # Assert exact metrics
+        assert metrics.total_claims == 4
+        assert metrics.verified_claims == 4
+        assert metrics.supported_count == 2
+        assert metrics.partially_supported_count == 1
+        assert metrics.contradicted_count == 1
+        assert metrics.flagged_count == 2
+        assert metrics.abstained_count == 0
+        assert metrics.cost_anomaly_count == 1
+        assert metrics.support_ratio == 0.625
+        assert metrics.cost_anomaly_rate == 0.25
+        assert metrics.recency_weighted_volume == 4.0
+        assert metrics.density_score == 0.7037
+        assert metrics.trust_tier == TrustTier.MODERATE
+
+        # Assert narrative small-sample transparency (N=4 claims is sparse sample: < min_volume 5)
+        assert insight.summary_text.startswith("PRELIMINARY ASSESSMENT (4 audited claims): MODERATE TRUST in Austin, TX")
+        assert "62.5% support ratio across 4 conclusive audit(s)" in insight.summary_text
+        assert "1 billing anomaly(ies) (25.0% rate)" in insight.summary_text
+
+    def test_hand_calculated_time_decay_exact(self):
+        """
+        Hand-calculated exponential time-decay test:
+        Decay constant tau = 45.0 days.
+        Claim 0: Age 0.0 days  -> w_0 = exp(-0/45) = 1.000000
+        Claim 1: Age 45.0 days -> w_1 = exp(-45/45) = exp(-1) = 0.367879
+        Claim 2: Age 90.0 days -> w_2 = exp(-90/45) = exp(-2) = 0.135335
+
+        Sum of weights = 1.0 + 0.367879 + 0.135335 = 1.503214 -> recency_volume ~= 1.503
+        volume_factor = min(1.0, 1.503214 / 5) = 0.300643
+
+        All 3 claims supported, zero cost anomalies:
+        - support_ratio = 1.0000
+        - cost_anomaly_rate = 0.0000
+        - raw_density = 0.45 * 1.0 + 0.35 * (1 - 0) + 0.20 * 0.300643
+                      = 0.45 + 0.35 + 0.060129 = 0.860129
+        - density_score = round(0.860129, 4) = 0.8601
+        - trust_tier = HIGH (>= 0.75)
+        """
+        now = datetime.now(timezone.utc)
+        claims = [
+            _make_claim("decay_0", timestamp=now),
+            _make_claim("decay_1", timestamp=now - timedelta(days=45)),
+            _make_claim("decay_2", timestamp=now - timedelta(days=90)),
+        ]
+        verifications = [
+            _make_verification(f"decay_{i}", VerificationVerdict.SUPPORTED, VerificationAction.ACCEPT, cost_anomaly=False)
+            for i in range(3)
+        ]
+
+        metrics, insight = self.svc.calculate_metrics("dallas_tx", "Dallas", "TX", claims, verifications)
+
+        assert metrics.total_claims == 3
+        assert metrics.verified_claims == 3
+        assert metrics.supported_count == 3
+        assert metrics.support_ratio == 1.0
+        assert metrics.cost_anomaly_rate == 0.0
+        assert metrics.recency_weighted_volume == 1.503
+        assert metrics.density_score == 0.8601
+        assert metrics.trust_tier == TrustTier.HIGH
+
+        # Verify preliminary notice for N=3 sparse claims
+        assert insight.summary_text.startswith("PRELIMINARY ASSESSMENT (3 audited claims): HIGH TRUST in Dallas, TX")
+        assert "Clinical guideline support is high (100.0% support ratio across 3 conclusive audit(s))" in insight.summary_text
+        assert "zero detected cost anomalies" in insight.summary_text
+
+    def test_hand_calculated_sparse_all_abstained_low_tier(self):
+        """
+        Sparse sample (3 claims) where all claims are abstained due to missing local guidelines,
+        with old timestamps (100 days old) and zero cost anomalies.
+
+        Hand calculation:
+        - total_claims = 3, verified_claims = 3
+        - supported = 0, partially_supported = 0, contradicted = 0, abstained = 3
+        - eval_conclusive = 0 -> support_ratio = 0.0000
+        - cost_anomaly_count = 0 -> cost_anomaly_rate = 0.0000
+        - delta_days = 100 -> w = exp(-100 / 45) ~= 0.108368
+        - recency_volume = 3 * 0.108368 = 0.325104 -> recency_volume ~= 0.325
+        - volume_factor = 0.325104 / 5 = 0.065021
+        - raw_density = 0.45 * 0.0 + 0.35 * (1 - 0) + 0.20 * 0.065021
+                      = 0.0 + 0.35 + 0.013004 = 0.363004
+        - density_score = round(0.363004, 4) = 0.3630
+        - trust_tier = LOW (since 0.3630 < 0.50)
+
+        CRITICAL REQUIREMENT:
+        Because cost_anomaly_count == 0 and contradicted_count == 0, the narrative MUST NOT
+        assert 'ELEVATED RISK'. Instead, it must classify as 'UNRESOLVED BASELINE', note that
+        guidelines were unrepresented, and report zero detected billing anomalies.
+        """
+        now = datetime.now(timezone.utc)
+        claims = [
+            _make_claim(f"abst_{i}", timestamp=now - timedelta(days=100))
+            for i in range(3)
+        ]
+        verifications = [
+            _make_verification(
+                f"abst_{i}",
+                VerificationVerdict.INSUFFICIENT_EVIDENCE,
+                VerificationAction.ABSTAIN,
+                support_score=0.0,
+                cost_anomaly=False,
+            )
+            for i in range(3)
+        ]
+
+        metrics, insight = self.svc.calculate_metrics("sparse_loc", "SparseCity", "SC", claims, verifications)
+
+        assert metrics.total_claims == 3
+        assert metrics.verified_claims == 3
+        assert metrics.abstained_count == 3
+        assert metrics.supported_count == 0
+        assert metrics.contradicted_count == 0
+        assert metrics.cost_anomaly_count == 0
+        assert metrics.support_ratio == 0.0
+        assert metrics.cost_anomaly_rate == 0.0
+        assert metrics.recency_weighted_volume == 0.325
+        assert metrics.density_score == 0.363
+        assert metrics.trust_tier == TrustTier.LOW
+
+        # Narrative assertions
+        assert "ELEVATED RISK" not in insight.summary_text
+        assert "PRELIMINARY ASSESSMENT (3 audited claims): UNRESOLVED BASELINE in SparseCity, SC" in insight.summary_text
+        assert "Clinical guideline adherence is inconclusive (3 claim(s) abstained due to unrepresented clinical guidelines)" in insight.summary_text
+        assert "Zero detected billing anomalies across 3 audited claims" in insight.summary_text
+        assert "Low score reflects lack of guideline coverage rather than confirmed non-compliance" in insight.summary_text
+        assert "Expand local clinical guideline coverage" in insight.recommendation
+
+    def test_zero_claims_score_strictly_zero(self):
+        """Zero claims must yield density_score = 0.0 and INSUFFICIENT_DATA."""
+        metrics, insight = self.svc.calculate_metrics("empty_oh", "EmptyCity", "OH", [], [])
+
+        assert metrics.total_claims == 0
+        assert metrics.verified_claims == 0
+        assert metrics.density_score == 0.0
+        assert metrics.support_ratio == 0.0
+        assert metrics.cost_anomaly_rate == 0.0
+        assert metrics.recency_weighted_volume == 0.0
+        assert metrics.trust_tier == TrustTier.INSUFFICIENT_DATA
+        assert "zero recorded claims" in insight.summary_text
+        assert "Insufficient data to evaluate trust" in insight.summary_text
+
+    def test_single_claim_insufficient_data_with_details(self):
+        """Single claim must be marked INSUFFICIENT_DATA with explicit minimum sample warning."""
+        claims = [_make_claim("single_1")]
+        verifications = [_make_verification("single_1", VerificationVerdict.SUPPORTED, VerificationAction.ACCEPT)]
+
+        metrics, insight = self.svc.calculate_metrics("single_ca", "Solitary", "CA", claims, verifications)
+
+        assert metrics.total_claims == 1
+        assert metrics.verified_claims == 1
+        assert metrics.trust_tier == TrustTier.INSUFFICIENT_DATA
+        assert "1 audited claim" in insight.summary_text
+        assert "minimum 2 verified claims required" in insight.summary_text
+
+    def test_future_timestamp_clamped_safely(self):
+        """Future timestamp must be clamped to delta_days = 0 (weight = 1.0) and not produce negative numbers or blow up."""
+        now = datetime.now(timezone.utc)
+        claims = [
+            _make_claim("future_0", timestamp=now + timedelta(days=10)),
+            _make_claim("future_1", timestamp=now + timedelta(days=365)),
+        ]
+        verifications = [
+            _make_verification("future_0"),
+            _make_verification("future_1"),
+        ]
+
+        metrics, _ = self.svc.calculate_metrics("future_ny", "FutureCity", "NY", claims, verifications)
+
+        # Clamped delta means each future claim gets exp(0) = 1.0
+        assert metrics.recency_weighted_volume == 2.0
+        assert 0.0 <= metrics.density_score <= 1.0

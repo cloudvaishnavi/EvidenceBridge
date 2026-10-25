@@ -82,5 +82,33 @@
     "source": "United States Pharmacopeia & CDC Healthcare Guidelines",
     "topics": ["normal saline", "sodium chloride", "iv fluid", "hydration", "intravenous"],
     "text": "0.9% Sodium Chloride Injection (Normal Saline) 1,000 mL sterile intravenous infusion bag is an essential isotonic crystalloid fluid indicated for extracellular fluid replacement, rehydration, and maintenance of electrolyte balance. It is an elemental commodity solution in hospital and emergency care with minimal baseline production and wholesale distribution costs."
+  },
+  {
+    "guideline_id": "GUIDE-IMAG-013",
+    "title": "ACR Appropriateness Criteria: MRI Brain without Contrast (CPT 70551)",
+    "source": "American College of Radiology (ACR) & American Academy of Neurology (AAN)",
+    "topics": ["mri brain", "brain mri", "70551", "cpt 70551", "neuroimaging", "headache", "neurology", "head mri", "cranial"],
+    "text": "Magnetic Resonance Imaging (MRI) of the brain without contrast (CPT 70551) is the standard diagnostic neuroimaging modality for evaluating persistent or progressive headache with red flags (focal neurological deficit, papilledema, sudden severe onset, new headache in immunocompromised or age >50), unexplained cognitive decline, or new-onset unprovoked seizures. Routine neuroimaging is explicitly not indicated for uncomplicated tension-type headache or typical episodic migraine lacking focal signs or red flags."
+  },
+  {
+    "guideline_id": "GUIDE-LAB-014",
+    "title": "CMS & CLSI Guidelines: Routine Venipuncture Collection (CPT 36415)",
+    "source": "Clinical and Laboratory Standards Institute (CLSI) & CMS Laboratory Manual",
+    "topics": ["venipuncture", "routine venipuncture", "36415", "cpt 36415", "blood draw", "phlebotomy", "blood specimen"],
+    "text": "Routine venipuncture (CPT 36415) encompasses routine collection of venous blood specimens via vacuum tube, syringe, or butterfly needle for subsequent diagnostic laboratory testing (such as complete blood counts or metabolic panels). It is a standard preliminary technical service with minimal procedural morbidity, indicated whenever diagnostic blood chemistry, hematology, or toxicology analysis is ordered."
+  },
+  {
+    "guideline_id": "GUIDE-RAD-015",
+    "title": "ACR Appropriateness Criteria: Chest Radiography 2 Views (CPT 71046)",
+    "source": "American College of Radiology (ACR) Thoracic Imaging Guidelines",
+    "topics": ["chest x-ray", "chest xray", "cpt 71046", "71046", "radiography", "chest pain", "dyspnea", "cough"],
+    "text": "Chest radiography, 2 views frontal and lateral (CPT 71046), is the initial imaging study of choice for acute respiratory symptoms, including dyspnea, persistent productive cough, suspected pneumonia, fever with respiratory distress, and acute non-traumatic chest pain to evaluate pneumothorax, pulmonary consolidation, or congestive heart failure. Routine screening chest radiography in asymptomatic outpatients is not recommended."
+  },
+  {
+    "guideline_id": "GUIDE-LAB-016",
+    "title": "CAP / AACC Standards: Complete Blood Count with Differential (CPT 85025)",
+    "source": "College of American Pathologists (CAP) & American Association for Clinical Chemistry",
+    "topics": ["cbc", "complete blood count", "cpt 85025", "85025", "differential", "anemia", "infection", "leukocytosis"],
+    "text": "Complete Blood Count (CBC) with automated differential (CPT 85025) provides quantitative evaluation of red blood cells, white blood cells, hemoglobin, hematocrit, and platelet counts. Indicated for evaluating suspected anemia, systemic infection, unexplained fever, hemorrhage, or hematologic monitoring during cytotoxic therapy."
   }
 ]

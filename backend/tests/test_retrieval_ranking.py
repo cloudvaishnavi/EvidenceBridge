@@ -88,3 +88,61 @@ def test_backward_compatible_snippets(verification_service):
         assert hasattr(s, "title")
         assert hasattr(s, "relevance_score")
         assert s.relevance_score >= 0.35
+
+
+def test_hybrid_ranking_brain_mri_cpt_70551(verification_service):
+    """
+    Ensure CPT 70551 Brain MRI retrieves the authoritative Brain MRI guideline
+    and appropriately discards or deprioritizes unrelated knee MRI guidelines.
+    """
+    passages = verification_service.retrieve_hybrid_passages(
+        entity="CPT 70551 MRI Brain w/o Contrast",
+        claim_text="Persistent headache with focal neurological signs, brain MRI ordered CPT 70551",
+        k=5
+    )
+    assert len(passages) > 0
+    top_p = passages[0]
+    assert top_p.guideline_id == "GUIDE-IMAG-013"
+    assert "Brain" in top_p.title
+    assert "70551" in top_p.title
+    assert top_p.relevance_score >= 0.70
+    assert top_p.used_in_decision is True
+    assert top_p.discard_reason is None
+
+    # Verify Knee MRI (CPT 73721) is either not in top-k or flagged as discarded with mismatch
+    knee_passages = [p for p in passages if p.guideline_id == "GUIDE-IMAG-007"]
+    for kp in knee_passages:
+        assert kp.used_in_decision is False
+        assert kp.discard_reason is not None
+        assert "mismatch" in kp.discard_reason.lower()
+
+
+def test_hybrid_ranking_routine_venipuncture_cpt_36415(verification_service):
+    """Ensure CPT 36415 Routine Venipuncture retrieves the venipuncture guideline."""
+    passages = verification_service.retrieve_hybrid_passages(
+        entity="Routine Venipuncture (CPT 36415)",
+        claim_text="Routine venipuncture blood draw collection for laboratory analysis CPT 36415",
+        k=5
+    )
+    assert len(passages) > 0
+    top_p = passages[0]
+    assert top_p.guideline_id == "GUIDE-LAB-014"
+    assert "Venipuncture" in top_p.title
+    assert top_p.relevance_score >= 0.60
+    assert top_p.used_in_decision is True
+
+
+def test_hybrid_ranking_chest_xray_cpt_71046(verification_service):
+    """Ensure CPT 71046 Chest X-Ray retrieves the chest radiography guideline."""
+    passages = verification_service.retrieve_hybrid_passages(
+        entity="Chest X-Ray 2 Views (CPT 71046)",
+        claim_text="Acute respiratory dyspnea and cough, chest x-ray 2 views CPT 71046",
+        k=5
+    )
+    assert len(passages) > 0
+    top_p = passages[0]
+    assert top_p.guideline_id == "GUIDE-RAD-015"
+    assert "Chest Radiography" in top_p.title or "Chest X-Ray" in top_p.title
+    assert top_p.relevance_score >= 0.60
+    assert top_p.used_in_decision is True
+

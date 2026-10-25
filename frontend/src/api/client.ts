@@ -6,14 +6,22 @@
 import {
   ApiError,
   AuditResponse,
+  AuthResponse,
   Claim,
   ClaimListResponse,
+  CommunityStory,
+  CommunityStoryCreate,
+  CommunityStoryListResponse,
   ExtractionRequest,
   ExtractionResponse,
   ExtractAndVerifyResponse,
   HealthResponse,
+  InsightsSummaryResponse,
   TrustDensityListResponse,
   TrustDensityResponse,
+  UserCreateRequest,
+  UserLoginRequest,
+  UserResponse,
   VerificationResponse,
   VerificationResult,
 } from '../types'
@@ -21,8 +29,18 @@ import {
 export const API_BASE = '/api/v1'
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
+  const token = typeof window !== 'undefined' ? localStorage.getItem('evidencebridge_token') : null
+  const authHeaders: Record<string, string> = {}
+  if (token) {
+    authHeaders['Authorization'] = `Bearer ${token}`
+  }
+
   const res = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(init?.headers ?? {}) },
+    headers: {
+      'Content-Type': 'application/json',
+      ...authHeaders,
+      ...(init?.headers ?? {}),
+    },
     ...init,
   })
   if (!res.ok) {
@@ -69,11 +87,13 @@ export function listClaims(params?: {
   limit?: number
   skip?: number
   location?: string
+  user_id?: string
 }): Promise<ClaimListResponse> {
   const qs = new URLSearchParams()
   if (params?.limit !== undefined) qs.set('limit', String(params.limit))
   if (params?.skip !== undefined) qs.set('skip', String(params.skip))
   if (params?.location) qs.set('location', params.location)
+  if (params?.user_id) qs.set('user_id', params.user_id)
   const q = qs.toString()
   return apiFetch<ClaimListResponse>(`/claims${q ? `?${q}` : ''}`)
 }
@@ -132,3 +152,85 @@ export function recomputeTrustDensity(
     { method: 'POST' },
   )
 }
+
+// ---- Layer 6: Evaluation Harness ----
+
+import type {
+  EvaluationReport,
+  EvaluationRunResponse,
+  EvaluationListResponse,
+} from '../types'
+
+export function runEvaluation(options?: {
+  dataset_path?: string
+  force_reverify?: boolean
+  offline_mode?: boolean
+}): Promise<EvaluationRunResponse> {
+  return apiFetch<EvaluationRunResponse>('/evaluate', {
+    method: 'POST',
+    body: JSON.stringify(options ?? { offline_mode: true }),
+  })
+}
+
+export function getEvaluationReport(runId: string): Promise<EvaluationReport> {
+  return apiFetch<EvaluationReport>(`/evaluate/${encodeURIComponent(runId)}`)
+}
+
+export function listEvaluationRuns(
+  limit = 20,
+  skip = 0,
+): Promise<EvaluationListResponse> {
+  return apiFetch<EvaluationListResponse>(`/evaluate?limit=${limit}&skip=${skip}`)
+}
+
+export function listStories(
+  limit = 50,
+  skip = 0,
+  userId?: string,
+): Promise<CommunityStoryListResponse> {
+  const qs = new URLSearchParams({ limit: String(limit), skip: String(skip) })
+  if (userId) qs.set('user_id', userId)
+  return apiFetch<CommunityStoryListResponse>(`/stories?${qs.toString()}`)
+}
+
+export function createStory(
+  story: CommunityStoryCreate,
+): Promise<CommunityStory> {
+  return apiFetch<CommunityStory>('/stories', {
+    method: 'POST',
+    body: JSON.stringify(story),
+  })
+}
+
+export function getInsightsSummary(userId?: string): Promise<InsightsSummaryResponse> {
+  const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : ''
+  return apiFetch<InsightsSummaryResponse>(`/insights/summary${qs}`)
+}
+
+// ---- Authentication & User Accounts (Part 2) ----
+
+export function loginApi(req: UserLoginRequest): Promise<AuthResponse> {
+  return apiFetch<AuthResponse>('/auth/login', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
+export function signupApi(req: UserCreateRequest): Promise<AuthResponse> {
+  return apiFetch<AuthResponse>('/auth/signup', {
+    method: 'POST',
+    body: JSON.stringify(req),
+  })
+}
+
+export function demoAuthApi(): Promise<AuthResponse> {
+  return apiFetch<AuthResponse>('/auth/demo', {
+    method: 'POST',
+  })
+}
+
+export function getMeApi(): Promise<UserResponse> {
+  return apiFetch<UserResponse>('/auth/me')
+}
+
+

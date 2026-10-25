@@ -1,0 +1,98 @@
+[
+  {
+    "case_id": "ctrl_01_supported_metformin",
+    "category": "normal_cost_supported_accept",
+    "raw_text": "Patient with newly diagnosed type 2 diabetes mellitus started on Metformin 1,000 mg twice daily. Total 30-day generic prescription pharmacy cost: $15.00.",
+    "source_type": "clinical_note",
+    "expected_entity": "Metformin 1,000 mg",
+    "gold_verdict": "supported",
+    "gold_action": "ACCEPT",
+    "cost_anomaly_flag": false,
+    "expected_rule_triggered": null,
+    "note": "Standard first-line guideline therapy for T2D within typical generic pricing ($4-$25). Clinical support high, no cost anomaly."
+  },
+  {
+    "case_id": "ctrl_02_supported_brain_mri",
+    "category": "clearly_supported",
+    "raw_text": "48-year-old patient presenting with progressive new-onset unilateral headache and focal neurological deficit. Underwent CPT 70551 MRI Brain without contrast at outpatient imaging center. Billed total: $650.00.",
+    "source_type": "clinical_note",
+    "expected_entity": "MRI Brain without contrast (CPT 70551)",
+    "gold_verdict": "supported",
+    "gold_action": "ACCEPT",
+    "cost_anomaly_flag": false,
+    "expected_rule_triggered": null,
+    "note": "Brain MRI (CPT 70551) indicated for progressive headache with focal neurological signs under ACR guidelines; billed amount $650 is within typical $450-$1,400 benchmark."
+  },
+  {
+    "case_id": "ctrl_03_contradicted_bronchitis_antibiotic",
+    "category": "clearly_contradicted",
+    "raw_text": "Patient diagnosed with acute viral bronchitis with mild non-productive cough. Prescribed Azithromycin 250 mg Z-Pak 6 tablets. Total cost $24.00.",
+    "source_type": "clinical_note",
+    "expected_entity": "Azithromycin 250 mg",
+    "gold_verdict": "contradicted",
+    "gold_action": "FLAG",
+    "cost_anomaly_flag": false,
+    "expected_rule_triggered": null,
+    "note": "CDC and GOLD guidelines explicitly state antibiotics are contraindicated for acute uncomplicated viral bronchitis. Clinically contradicted."
+  },
+  {
+    "case_id": "ctrl_04_cost_anomaly_saline_extreme",
+    "category": "cost_anomaly_flag",
+    "raw_text": "Emergency room administration of 0.9% Sodium Chloride (Normal Saline) 1,000 mL IV infusion for dehydration. Total billed hospital supply charge: $720.00.",
+    "source_type": "hospital_bill",
+    "expected_entity": "0.9% Sodium Chloride (Normal Saline) 1,000 mL IV",
+    "gold_verdict": "supported",
+    "gold_action": "FLAG",
+    "cost_anomaly_flag": true,
+    "expected_rule_triggered": null,
+    "note": "Normal saline is clinically appropriate for hydration, but billed amount of $720.00 is a 16.0x extreme markup over the $45 benchmark maximum. Policy overrides action to FLAG."
+  },
+  {
+    "case_id": "ctrl_05_cost_anomaly_venipuncture",
+    "category": "cost_anomaly_flag",
+    "raw_text": "Outpatient phlebotomy blood draw: CPT 36415 Routine Venipuncture. Itemized hospital bill charge: $125.00.",
+    "source_type": "hospital_bill",
+    "expected_entity": "Routine Venipuncture (CPT 36415)",
+    "gold_verdict": "supported",
+    "gold_action": "FLAG",
+    "cost_anomaly_flag": true,
+    "expected_rule_triggered": null,
+    "note": "Routine venipuncture is standard diagnostic collection (typical max $25), but $125 is 5.0x markup, triggering cost anomaly flag."
+  },
+  {
+    "case_id": "ctrl_06_abstain_rare_unsupported_entity",
+    "category": "insufficient_evidence_abstain",
+    "raw_text": "Patient received hyperbaric oxygen therapy and off-label intravenous ozone infusion sessions for general chronic fatigue syndrome. Charge: $180.00.",
+    "source_type": "forum_post",
+    "expected_entity": "Intravenous ozone infusion",
+    "gold_verdict": "insufficient_evidence",
+    "gold_action": "ABSTAIN",
+    "cost_anomaly_flag": false,
+    "expected_rule_triggered": "NO_RELEVANT_EVIDENCE",
+    "note": "No authoritative guideline in local knowledge base for ozone infusion/CFS therapy. Safety gate triggers NO_RELEVANT_EVIDENCE or UNBENCHMARKED_HIGH_COST abstention."
+  },
+  {
+    "case_id": "ctrl_07_abstain_unbenchmarked_high_cost",
+    "category": "insufficient_evidence_abstain",
+    "raw_text": "Experimental robotic spine lumbar laser ablation procedure performed at private clinic. Billed patient charge: $12,500.00.",
+    "source_type": "hospital_bill",
+    "expected_entity": "Experimental robotic spine lumbar laser ablation",
+    "gold_verdict": "insufficient_evidence",
+    "gold_action": "ABSTAIN",
+    "cost_anomaly_flag": false,
+    "expected_rule_triggered": "UNBENCHMARKED_HIGH_COST",
+    "note": "Experimental procedure not present in public price benchmarks with billed cost > $100. Triggers Rule 5 UNBENCHMARKED_HIGH_COST abstention."
+  },
+  {
+    "case_id": "ctrl_08_supported_lisinopril_normal_cost",
+    "category": "normal_cost_supported_accept",
+    "raw_text": "Adult patient with Stage 2 essential hypertension prescribed Lisinopril 20 mg oral daily. Blood pressure reduced to 126/78 mmHg. Retail pharmacy monthly charge: $12.00.",
+    "source_type": "clinical_note",
+    "expected_entity": "Lisinopril 20 mg",
+    "gold_verdict": "supported",
+    "gold_action": "ACCEPT",
+    "cost_anomaly_flag": false,
+    "expected_rule_triggered": null,
+    "note": "Lisinopril is standard first-line ACE inhibitor therapy for hypertension under ACC/AHA guidelines; $12 is within $4-$20 normal benchmark."
+  }
+]
