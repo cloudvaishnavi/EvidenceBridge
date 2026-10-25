@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { runEvaluation, listEvaluationRuns, getEvaluationReport } from '../api/client'
+import { runEvaluation, listEvaluationRuns, getEvaluationReport, ensureAuthToken } from '../api/client'
 import type { EvaluationReport } from '../types'
 
 export default function Evaluation() {
@@ -13,22 +13,30 @@ export default function Evaluation() {
 
   // Load existing runs on mount
   useEffect(() => {
-    listEvaluationRuns(5)
+    let active = true
+    ensureAuthToken()
+      .then(() => listEvaluationRuns(5))
       .then((res) => {
-        setHistoricalRuns(res.runs)
-        if (res.runs.length > 0 && !report) {
-          setReport(res.runs[0])
+        if (active) {
+          setHistoricalRuns(res.runs)
+          if (res.runs.length > 0) {
+            setReport(res.runs[0])
+          }
         }
       })
-      .catch(() => {
-        // ignore if none yet
+      .catch((err) => {
+        console.warn('Failed to load evaluation runs:', err)
       })
+    return () => {
+      active = false
+    }
   }, [])
 
   const handleRunEvaluation = async () => {
     setLoading(true)
     setError(null)
     try {
+      await ensureAuthToken()
       const res = await runEvaluation({ offline_mode: offlineMode, force_reverify: true })
       setReport(res.report)
       // Refresh historical list
@@ -44,6 +52,7 @@ export default function Evaluation() {
     setLoading(true)
     setError(null)
     try {
+      await ensureAuthToken()
       const rep = await getEvaluationReport(runId)
       setReport(rep)
     } catch (err: unknown) {

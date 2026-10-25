@@ -27,7 +27,12 @@ from app.models.schemas import (
 from app.services.abstention import abstention_service
 from app.services.audit import audit_service
 from app.services.cost_anomaly import cost_anomaly_service
-from app.services.extraction import ExtractionError, OllamaConnectionError
+from app.services.extraction import (
+    ExtractionError,
+    GeminiConnectionError,
+    LLMConnectionError,
+    OllamaConnectionError,
+)
 from app.services.vector_store import vector_store_service
 from app.utils.logger import logger
 
@@ -78,13 +83,28 @@ ANATOMICAL_REGIONS: dict[str, set[str]] = {
 
 
 class VerificationService:
-    """Service to verify claims against local evidence guidelines using local Ollama model."""
+    """Service to verify claims against evidence guidelines using Gemini or Ollama."""
 
-    def __init__(self, base_url: Optional[str] = None, model: Optional[str] = None):
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+    ):
         self.settings = get_settings()
+        self.provider = (provider or self.settings.LLM_PROVIDER).lower()
+
+        # Gemini configuration
+        self.gemini_model = model or self.settings.GEMINI_MODEL
+        self.gemini_base_url = (base_url or self.settings.GEMINI_BASE_URL).rstrip("/")
+        self.gemini_api_key = self.settings.GEMINI_API_KEY
+        self.gemini_timeout = self.settings.GEMINI_TIMEOUT_SECONDS
+
+        # Ollama configuration
         self.base_url = (base_url or self.settings.OLLAMA_BASE_URL).rstrip("/")
         self.model = model or self.settings.OLLAMA_MODEL
         self.timeout = self.settings.OLLAMA_TIMEOUT_SECONDS
+
         self.relevance_threshold = self.settings.RETRIEVAL_RELEVANCE_THRESHOLD
         self.guidelines_file = self._resolve_guidelines_path()
         self.guidelines: list[dict[str, Any]] = []
@@ -466,31 +486,11 @@ class VerificationService:
             f"AUDIT JSON OUTPUT:"
         )
 
-        payload = {
-            "model": self.model,
-            "prompt": user_prompt,
-            "format": "json",
-            "stream": False,
-            "options": {
-                "temperature": 0.0,
-                "top_p": 0.9,
-            }
-        }
-
-        # 5. Call Ollama for verification judgment
-        try:
-            async with httpx.AsyncClient(timeout=self.timeout) as client:
-                resp = await client.post(f"{self.base_url}/api/generate", json=payload)
-                if resp.status_code != 200:
-                    raise ExtractionError(f"Ollama returned HTTP {resp.status_code}: {resp.text}")
-                data = resp.json()
-                raw_response = data.get("response", "")
-        except httpx.ConnectError as e:
-            logger.error(f"Cannot reach Ollama for verification: {e}")
-            raise OllamaConnectionError(f"Ollama LLM unreachable at {self.base_url}: {e}")
-        except Exception as e:
-            logger.error(f"Verification request failed: {e}")
-            raise ExtractionError(f"Verification service error: {e}")
+        # 5. Call configured LLM (Gemini or Ollama) for verification judgment
+        if self.provider == "gemini":
+            raw_response = await self._call_gemini_verification(user_prompt)
+        else:
+            raw_response = await self._call_ollama_verification(user_prompt)
 
         # 6. Parse model response
         raw_verdict, raw_support_score, raw_reasoning, conflict_assessment = (
@@ -553,6 +553,91 @@ class VerificationService:
             logger.warning(f"Failed to persist audit trail: {e}")
 
         return verification
+
+    async def _call_gemini_verification(self, prompt: str) -> str:
+        """Call Google Gemini API for clinical verification judgment."""
+        if not self.gemini_api_key or not self.gemini_api_key.strip():
+            msg = "GEMINI_API_KEY is not configured or missing."
+            logger.error(msg)
+            raise GeminiConnectionError(msg)
+
+        logger.info(f"Calling Gemini model '{self.gemini_model}' for clinical verification")
+        url = f"{self.gemini_base_url}/models/{self.gemini_model}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.gemini_api_key,
+        }
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.0,
+                "responseMimeType": "application/json",
+            },
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.gemini_timeout) as client:
+                resp = await client.post(url, headers=headers, json=payload)
+                if resp.status_code != 200:
+                    if resp.status_code in (401, 403):
+                        raise GeminiConnectionError(f"Gemini API authentication failed (HTTP {resp.status_code}). Check GEMINI_API_KEY.")
+                    raise ExtractionError(f"Gemini API returned HTTP {resp.status_code}: {resp.text}")
+
+                data = resp.json()
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    raise ExtractionError("Gemini API returned 0 candidate completions for verification.")
+
+                parts = candidates[0].get("content", {}).get("parts", [])
+                if not parts or "text" not in parts[0]:
+                    raise ExtractionError("Gemini API candidate missing text content.")
+
+                return parts[0]["text"]
+        except (GeminiConnectionError, ExtractionError):
+            raise
+        except httpx.ConnectError as e:
+            logger.error(f"Cannot reach Gemini API for verification: {e}")
+            raise GeminiConnectionError(f"Gemini API unreachable at {self.gemini_base_url}: {e}") from e
+        except httpx.TimeoutException as e:
+            logger.error(f"Gemini verification request timed out: {e}")
+            raise ExtractionError(f"Gemini verification request timed out after {self.gemini_timeout}s.") from e
+        except Exception as e:
+            logger.error(f"Verification request failed: {e}")
+            raise ExtractionError(f"Verification service error: {e}")
+
+    async def _call_ollama_verification(self, prompt: str) -> str:
+        """Call Ollama /api/generate for clinical verification judgment."""
+        logger.info(f"Calling Ollama model '{self.model}' for clinical verification")
+        payload = {
+            "model": self.model,
+            "prompt": prompt,
+            "format": "json",
+            "stream": False,
+            "options": {
+                "temperature": 0.0,
+                "top_p": 0.9,
+            },
+        }
+        try:
+            async with httpx.AsyncClient(timeout=self.timeout) as client:
+                resp = await client.post(f"{self.base_url}/api/generate", json=payload)
+                if resp.status_code != 200:
+                    raise ExtractionError(f"Ollama returned HTTP {resp.status_code}: {resp.text}")
+                data = resp.json()
+                return data.get("response", "")
+        except httpx.ConnectError as e:
+            logger.error(f"Cannot reach Ollama for verification: {e}")
+            raise OllamaConnectionError(f"Ollama LLM unreachable at {self.base_url}: {e}") from e
+        except httpx.TimeoutException as e:
+            logger.error(f"Ollama verification request timed out: {e}")
+            raise ExtractionError(f"Ollama request timed out after {self.timeout}s.") from e
+        except Exception as e:
+            logger.error(f"Verification request failed: {e}")
+            raise ExtractionError(f"Verification service error: {e}")
 
     def _parse_verification_response(
         self,

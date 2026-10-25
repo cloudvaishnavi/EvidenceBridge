@@ -77,6 +77,64 @@ const STORAGE_LANG_KEY = 'evidencebridge_voice_lang'
 const STORAGE_ENABLED_KEY = 'evidencebridge_voice_enabled'
 const STORAGE_CONTINUOUS_KEY = 'evidencebridge_voice_continuous'
 
+// Voice search helpers (browser-agnostic)
+export function findKannadaVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | undefined {
+  if (!voices || voices.length === 0) return undefined
+
+  // 1. Primary: Match BCP-47 / ISO language codes (kn, kn-IN, kan, kan-IN)
+  const langMatch = voices.find((v) => {
+    const lang = (v.lang || '').toLowerCase().replace(/_/g, '-')
+    return (
+      lang === 'kn-in' ||
+      lang === 'kn' ||
+      lang.startsWith('kn-') ||
+      lang === 'kan' ||
+      lang.startsWith('kan-')
+    )
+  })
+  if (langMatch) return langMatch
+
+  // 2. Secondary: Match by voice name or URI (English "kannada", native script "ಕನ್ನಡ", Windows "gagan"/"sapna")
+  return voices.find((v) => {
+    const nameLower = (v.name || '').toLowerCase()
+    const rawName = v.name || ''
+    const uriLower = (v.voiceURI || '').toLowerCase()
+    const rawUri = v.voiceURI || ''
+
+    return (
+      nameLower.includes('kannada') ||
+      rawName.includes('ಕನ್ನಡ') ||
+      nameLower.includes('gagan') ||
+      nameLower.includes('sapna') ||
+      uriLower.includes('kannada') ||
+      rawUri.includes('ಕನ್ನಡ') ||
+      uriLower.includes('kn-in') ||
+      uriLower.includes('kn_in') ||
+      uriLower.includes('kn-') ||
+      uriLower.includes('kn_')
+    )
+  })
+}
+
+export function findEnglishVoice(voices: SpeechSynthesisVoice[]): SpeechSynthesisVoice | undefined {
+  if (!voices || voices.length === 0) return undefined
+  return (
+    voices.find(
+      (v) =>
+        (v.lang || '').toLowerCase().startsWith('en') &&
+        (v.name.includes('Google') ||
+          v.name.includes('Natural') ||
+          v.name.includes('Samantha') ||
+          v.name.includes('Jenny') ||
+          v.name.includes('Guy') ||
+          v.name.includes('Zira') ||
+          v.name.includes('David'))
+    ) ||
+    voices.find((v) => (v.lang || '').toLowerCase().startsWith('en')) ||
+    voices[0]
+  )
+}
+
 // Helper to query local Ollama LLM
 async function queryLocalOllama(prompt: string, systemPrompt?: string): Promise<string | null> {
   const controller = new AbortController()
@@ -91,6 +149,32 @@ async function queryLocalOllama(prompt: string, systemPrompt?: string): Promise<
     stream: false,
   }
 
+  const customOllamaUrl = import.meta.env.VITE_OLLAMA_BASE_URL
+  if (customOllamaUrl) {
+    try {
+      const res = await fetch(`${customOllamaUrl.replace(/\/+$/, '')}/api/generate`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+        signal: controller.signal,
+      })
+      clearTimeout(timeoutId)
+      if (res.ok) {
+        const data = await res.json()
+        return data.response?.trim() || null
+      }
+    } catch {
+      clearTimeout(timeoutId)
+      return null
+    }
+  }
+
+  const isLocalHost =
+    typeof window !== 'undefined' &&
+    (window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname === '[::1]')
+
   try {
     const res = await fetch('/ollama/api/generate', {
       method: 'POST',
@@ -104,6 +188,9 @@ async function queryLocalOllama(prompt: string, systemPrompt?: string): Promise<
     return data.response?.trim() || null
   } catch {
     clearTimeout(timeoutId)
+    if (!isLocalHost) {
+      return null
+    }
     try {
       const res2 = await fetch('http://localhost:11434/api/generate', {
         method: 'POST',
@@ -164,7 +251,7 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const recognitionRef = useRef<any>(null)
   const availableVoicesRef = useRef<SpeechSynthesisVoice[]>([])
-  const audioFallbackRef = useRef<HTMLAudioElement | null>(null)
+  const activeUtteranceRef = useRef<SpeechSynthesisUtterance | null>(null)
   const isContinuousRef = useRef(isContinuous)
   isContinuousRef.current = isContinuous
 
@@ -184,6 +271,20 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
   }
 
+  // Dynamic voice query and refresh
+  const updateVoices = useCallback(() => {
+    if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
+      setKannadaVoiceAvailable(false)
+      return
+    }
+    const voices = window.speechSynthesis.getVoices()
+    if (voices && voices.length > 0) {
+      availableVoicesRef.current = voices
+      const hasKn = !!findKannadaVoice(voices)
+      setKannadaVoiceAvailable(hasKn)
+    }
+  }, [])
+
   // Persist language
   const setLanguage = (lang: 'en' | 'kn') => {
     setLanguageState(lang)
@@ -191,6 +292,10 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       localStorage.setItem(STORAGE_LANG_KEY, lang)
     } catch {
       // ignore
+    }
+    setError(null)
+    if (lang === 'kn') {
+      updateVoices()
     }
   }
 
@@ -203,130 +308,61 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
     }
   }, [isEnabled])
 
-  // Load and cache browser voices
+  // Load and cache browser voices at runtime (handling async voice loading)
   useEffect(() => {
     if (typeof window === 'undefined' || !('speechSynthesis' in window)) return
-
-    const updateVoices = () => {
-      const voices = window.speechSynthesis.getVoices()
-      if (voices.length > 0) {
-        availableVoicesRef.current = voices
-        const hasKn = voices.some(
-          (v) =>
-            v.lang.toLowerCase().startsWith('kn') ||
-            v.lang.toLowerCase().replace('_', '-').includes('kn-in') ||
-            v.name.toLowerCase().includes('kannada') ||
-            v.name.toLowerCase().includes('gagan') ||
-            v.name.toLowerCase().includes('sapna')
-        )
-        // Accurately reflect whether local browser voice pack exists
-        setKannadaVoiceAvailable(hasKn)
-      }
-    }
 
     updateVoices()
     window.speechSynthesis.onvoiceschanged = updateVoices
 
+    // Check at staggered intervals to catch asynchronous voice loading
+    const t1 = setTimeout(updateVoices, 100)
+    const t2 = setTimeout(updateVoices, 400)
+    const t3 = setTimeout(updateVoices, 1200)
+
     return () => {
-      window.speechSynthesis.cancel()
-      if (audioFallbackRef.current) {
+      clearTimeout(t1)
+      clearTimeout(t2)
+      clearTimeout(t3)
+      if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
+        window.speechSynthesis.onvoiceschanged = null
         try {
-          audioFallbackRef.current.pause()
+          window.speechSynthesis.cancel()
         } catch {
           // ignore
         }
       }
+      activeUtteranceRef.current = null
       if (restartListeningTimeoutRef.current) {
         clearTimeout(restartListeningTimeoutRef.current)
       }
     }
-  }, [])
+  }, [updateVoices])
 
   // Stop speaking
   const stopSpeaking = useCallback(() => {
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel()
-    }
-    if (audioFallbackRef.current) {
       try {
-        audioFallbackRef.current.pause()
-        audioFallbackRef.current.currentTime = 0
+        window.speechSynthesis.cancel()
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume()
+        }
       } catch {
         // ignore
       }
     }
+    activeUtteranceRef.current = null
     setStatus((prev) => (prev === 'speaking' ? 'idle' : prev))
   }, [])
 
-  // Text-To-Speech implementation
+  // Text-To-Speech implementation using native browser SpeechSynthesis
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const startListeningRef = useRef<any>(null)
-
-  const playAudioFallback = useCallback(
-    (fallbackText: string, fallbackLang: 'en' | 'kn') => {
-      try {
-        if (audioFallbackRef.current) {
-          try {
-            audioFallbackRef.current.pause()
-            audioFallbackRef.current.currentTime = 0
-          } catch {
-            // ignore
-          }
-        }
-        const cleanSnippet = fallbackText.trim().replace(/\s+/g, ' ').slice(0, 350)
-        // Use /api/tts which is reliably proxied to FastAPI backend
-        const ttsUrl = `/api/tts?lang=${fallbackLang}&text=${encodeURIComponent(cleanSnippet)}`
-        const audio = new Audio(ttsUrl)
-        audioFallbackRef.current = audio
-
-        audio.onplay = () => {
-          setStatus('speaking')
-        }
-        audio.onended = () => {
-          setStatus('idle')
-          if (isContinuousRef.current) {
-            if (restartListeningTimeoutRef.current) clearTimeout(restartListeningTimeoutRef.current)
-            restartListeningTimeoutRef.current = setTimeout(() => {
-              if (isContinuousRef.current && statusRef.current === 'idle') {
-                startListeningRef.current?.()
-              }
-            }, 450)
-          }
-        }
-        audio.onerror = (ev) => {
-          console.warn('Audio fallback stream failed:', ev)
-          setStatus('idle')
-          setError(
-            fallbackLang === 'kn'
-              ? 'ಕನ್ನಡ ಆಡಿಯೋ ಲೋಡ್ ಆಗಲಿಲ್ಲ. ಪಠ್ಯವನ್ನು ಪರದೆಯ ಮೇಲೆ ಪ್ರದರ್ಶಿಸಲಾಗಿದೆ.'
-              : 'Spoken audio could not be generated. Text is displayed on screen.'
-          )
-        }
-        audio.play().catch((playErr) => {
-          console.warn('Audio play restricted by browser autoplay policy:', playErr)
-          setStatus('idle')
-          if (playErr.name === 'NotAllowedError') {
-            setError(
-              fallbackLang === 'kn'
-                ? 'ಆಡಿಯೋ ಕೇಳಲು ಕೆಳಗಿನ Repeat (🔊) ಬಟನ್ ಒತ್ತಿ.'
-                : 'Click Repeat (🔊) to hear the spoken response.'
-            )
-          }
-        })
-      } catch (err) {
-        console.warn('Audio fallback exception:', err)
-        setStatus('idle')
-      }
-    },
-    []
-  )
 
   const speak = useCallback(
     (text: string, langOverride?: 'en' | 'kn') => {
       const activeLang = langOverride || language
       stopSpeaking()
-      setError(null)
-      setStatus('speaking')
       setLastSpoken(text)
 
       // Add to conversation history
@@ -341,58 +377,101 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       ])
 
       if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
-        // Fallback to audio stream if browser SpeechSynthesis is absent
-        playAudioFallback(text, activeLang)
+        setStatus('idle')
+        setError(
+          activeLang === 'kn'
+            ? 'Kannada voice is not available on this device. Showing text instead.'
+            : 'Speech synthesis is not supported on this browser. Showing text instead.'
+        )
         return
       }
 
       // Dynamically query available voices at runtime
       const liveVoices = window.speechSynthesis.getVoices()
-      if (liveVoices.length > 0) {
+      if (liveVoices && liveVoices.length > 0) {
         availableVoicesRef.current = liveVoices
       }
-      const voices = liveVoices.length > 0 ? liveVoices : availableVoicesRef.current
-
-      let matchedVoice: SpeechSynthesisVoice | undefined
+      const voices = (liveVoices && liveVoices.length > 0) ? liveVoices : availableVoicesRef.current
 
       if (activeLang === 'kn') {
-        matchedVoice = voices.find(
-          (v) =>
-            v.lang.toLowerCase().startsWith('kn') ||
-            v.lang.toLowerCase().replace('_', '-').includes('kn-in') ||
-            v.name.toLowerCase().includes('kannada') ||
-            v.name.toLowerCase().includes('gagan') ||
-            v.name.toLowerCase().includes('sapna')
-        )
-
-        // If no local Kannada voice pack in browser, seamlessly stream clean synthesized audio!
-        if (!matchedVoice) {
-          playAudioFallback(text, 'kn')
+        const knVoice = findKannadaVoice(voices)
+        if (!knVoice) {
+          // HONEST FALLBACK:
+          // Never set status to 'speaking'. Never show speaking animation.
+          // Explicitly inform the user that Kannada voice is unavailable and text is shown instead.
+          setKannadaVoiceAvailable(false)
+          activeUtteranceRef.current = null
+          setStatus('idle')
+          setError('Kannada voice is not available on this device. Showing text instead.')
           return
         }
-      } else {
-        matchedVoice =
-          voices.find(
-            (v) =>
-              v.lang.startsWith('en') &&
-              (v.name.includes('Google') ||
-                v.name.includes('Natural') ||
-                v.name.includes('Samantha') ||
-                v.name.includes('Zira'))
-          ) || voices.find((v) => v.lang.startsWith('en'))
+
+        // Suitable Kannada voice is available on this device
+        setKannadaVoiceAvailable(true)
+        setError(null)
+
+        const utterance = new SpeechSynthesisUtterance(text)
+        utterance.voice = knVoice
+        utterance.lang = knVoice.lang || 'kn-IN'
+        utterance.rate = 0.95
+        utterance.pitch = 1.0
+
+        activeUtteranceRef.current = utterance
+
+        utterance.onstart = () => {
+          setStatus('speaking')
+        }
+
+        utterance.onend = () => {
+          activeUtteranceRef.current = null
+          setStatus('idle')
+          if (isContinuousRef.current) {
+            if (restartListeningTimeoutRef.current) clearTimeout(restartListeningTimeoutRef.current)
+            restartListeningTimeoutRef.current = setTimeout(() => {
+              if (isContinuousRef.current && statusRef.current === 'idle') {
+                startListeningRef.current?.()
+              }
+            }, 450)
+          }
+        }
+
+        utterance.onerror = (e) => {
+          console.warn('Kannada SpeechSynthesis error:', e)
+          activeUtteranceRef.current = null
+          setStatus('idle')
+        }
+
+        // Unstick any paused audio stream in Chromium
+        if (window.speechSynthesis.paused) {
+          window.speechSynthesis.resume()
+        }
+        window.speechSynthesis.speak(utterance)
+        return
       }
+
+      // English voice path
+      const enVoice = findEnglishVoice(voices)
+      setError(null)
 
       const utterance = new SpeechSynthesisUtterance(text)
-      if (matchedVoice) {
-        utterance.voice = matchedVoice
+      if (enVoice) {
+        utterance.voice = enVoice
+        utterance.lang = enVoice.lang || 'en-US'
+      } else {
+        utterance.lang = 'en-US'
       }
-      utterance.lang = activeLang === 'kn' ? 'kn-IN' : 'en-US'
-      utterance.rate = activeLang === 'kn' ? 0.95 : 1.0
+      utterance.rate = 1.0
       utterance.pitch = 1.0
 
+      activeUtteranceRef.current = utterance
+
+      utterance.onstart = () => {
+        setStatus('speaking')
+      }
+
       utterance.onend = () => {
+        activeUtteranceRef.current = null
         setStatus('idle')
-        // Auto-resume continuous listening if explicitly enabled
         if (isContinuousRef.current) {
           if (restartListeningTimeoutRef.current) clearTimeout(restartListeningTimeoutRef.current)
           restartListeningTimeoutRef.current = setTimeout(() => {
@@ -404,26 +483,17 @@ export function VoiceProvider({ children }: { children: React.ReactNode }) {
       }
 
       utterance.onerror = (e) => {
-        console.warn('SpeechSynthesis error:', e)
-        if (activeLang === 'kn') {
-          // Failover to streaming audio on synthesis error
-          playAudioFallback(text, 'kn')
-          return
-        }
+        console.warn('English SpeechSynthesis error:', e)
+        activeUtteranceRef.current = null
         setStatus('idle')
-        if (isContinuousRef.current) {
-          if (restartListeningTimeoutRef.current) clearTimeout(restartListeningTimeoutRef.current)
-          restartListeningTimeoutRef.current = setTimeout(() => {
-            if (isContinuousRef.current && statusRef.current === 'idle') {
-              startListeningRef.current?.()
-            }
-          }, 500)
-        }
       }
 
+      if (window.speechSynthesis.paused) {
+        window.speechSynthesis.resume()
+      }
       window.speechSynthesis.speak(utterance)
     },
-    [language, playAudioFallback, stopSpeaking]
+    [language, stopSpeaking]
   )
 
   // Read current claim aloud
@@ -508,7 +578,7 @@ Action: ${activeClaim.action}
 Support Score: ${Math.round((activeClaim.supportScore || 0) * 100)}%
 Cost Anomaly Flag: ${activeClaim.costAnomalyFlag ? 'Yes' : 'No'}
 Multiplier: ${activeClaim.anomalyDetails?.multiplier || '1.0'}x
-Benchmark: $${activeClaim.anomalyDetails?.benchmark_min || 0} - $${activeClaim.anomalyDetails?.benchmark_max || 0}
+Benchmark: ₹${activeClaim.anomalyDetails?.benchmark_min || 0} - ₹${activeClaim.anomalyDetails?.benchmark_max || 0}
 Reasoning: ${activeClaim.reasoning || 'None'}
 `
 
@@ -529,6 +599,14 @@ Reasoning: ${activeClaim.reasoning || 'None'}
         return
       }
 
+      // Currency check
+      const isUsd =
+        (activeClaim.costRange || '').includes('$') ||
+        (activeClaim.costRange || '').toUpperCase().includes('USD') ||
+        (activeClaim.anomalyDetails?.explanation || '').includes('$')
+      const currencySymbolEn = isUsd ? '$' : '₹'
+      const currencyNameKn = isUsd ? 'ಡಾಲರ್' : 'ರೂಪಾಯಿ'
+
       // High-quality deterministic fallback (and Kannada synthesis)
       let fallbackText = ''
 
@@ -544,8 +622,8 @@ Reasoning: ${activeClaim.reasoning || 'None'}
         } else if (type === 'price_problem') {
           if (activeClaim.anomalyDetails) {
             const mult = activeClaim.anomalyDetails.multiplier?.toFixed(1) || '3.0'
-            const max = activeClaim.anomalyDetails.benchmark_max?.toFixed(2) || '0'
-            fallbackText = `ಬಿಲ್ ಮಾಡಿದ ಮೊತ್ತವು ಅನುಮೋದಿತ ಗರಿಷ್ಠ ${max} ಡಾಲರ್ ಬೆಲೆಗಿಂತ ${mult} ಪಟ್ಟು ಹೆಚ್ಚಾಗಿದೆ. ಇದು ಅಸಹಜ ಬೆಲೆ ಹೆಚ್ಚಳವಾಗಿದೆ.`
+            const max = activeClaim.anomalyDetails.benchmark_max?.toLocaleString('en-IN') || '0'
+            fallbackText = `ಬಿಲ್ ಮಾಡಿದ ಮೊತ್ತವು ಸಾಮಾನ್ಯ ಮಾನದಂಡದ ಗರಿಷ್ಠ ${currencyNameKn} ${max} ಕ್ಕಿಂತ ${mult} ಪಟ್ಟು ಹೆಚ್ಚಾಗಿದೆ. ಇದು ಅಸಹಜ ಬೆಲೆ ಹೆಚ್ಚಳವಾಗಿದೆ.`
           } else {
             fallbackText = `ಈ ಸೇವೆಗೆ ಯಾವುದೇ ಸಾರ್ವಜನಿಕ ಬೆಲೆಯ ಮಾನದಂಡ ಲಭ್ಯವಿಲ್ಲ.`
           }
@@ -564,8 +642,8 @@ Reasoning: ${activeClaim.reasoning || 'None'}
         } else if (type === 'price_problem') {
           if (activeClaim.anomalyDetails) {
             const mult = activeClaim.anomalyDetails.multiplier?.toFixed(1) || '3.0'
-            const max = activeClaim.anomalyDetails.benchmark_max?.toFixed(2) || '0'
-            fallbackText = `The billed amount exceeds the expected maximum of $${max} by ${mult} times, triggering a high-severity price alert.`
+            const max = activeClaim.anomalyDetails.benchmark_max?.toLocaleString('en-IN') || '0'
+            fallbackText = `The billed amount exceeds the expected maximum of ${currencySymbolEn}${max} by ${mult} times, triggering a high-severity price alert.`
           } else {
             fallbackText = `There is no standard public pricing benchmark available for this high-cost line item.`
           }
@@ -582,37 +660,51 @@ Reasoning: ${activeClaim.reasoning || 'None'}
   // Voice Command Dispatcher
   const handleVoiceCommand = useCallback(
     async (recognizedText: string) => {
-      const text = recognizedText.trim().toLowerCase()
-      if (!text) return
+      const rawText = (recognizedText || '').trim()
+      if (!rawText) return
 
-      // Add to history
+      // Add user transcript to conversation history
       setHistory((prev) => [
         ...prev.slice(-15),
         {
           id: `msg_${Date.now()}_${Math.random().toString(36).substring(2, 6)}`,
           sender: 'user',
-          text: recognizedText,
+          text: rawText,
           timestamp: new Date(),
         },
       ])
 
+      const rawLower = rawText.toLowerCase()
+      // Strip zero-width non-joiners (\u200C), joiners (\u200D), and normalize spaces
+      const text = rawLower.replace(/[\u200B-\u200D\uFEFF]/g, '').replace(/\s+/g, ' ')
+
+      const matchesAny = (...patterns: string[]) => {
+        return patterns.some((p) => {
+          const cleanP = p.toLowerCase().replace(/[\u200B-\u200D\uFEFF]/g, '').trim()
+          return text.includes(cleanP) || rawLower.includes(p.toLowerCase()) || text === cleanP
+        })
+      }
+
       // 1. Natural Stop / Disable Voice Assistant Commands
       if (
-        text.includes('stop listening') ||
-        text.includes('disable voice') ||
-        text.includes('turn off voice') ||
-        text.includes('pause voice') ||
-        text.includes('pause listening') ||
-        text.includes('shut down voice') ||
-        text.includes('stop assistant') ||
-        text.includes('quiet') ||
-        text.includes('shut up') ||
-        text.includes('ನಿಲ್ಲಿಸು') ||
-        text.includes('ನಿಲ್ಲಿಸಿ') ||
-        text.includes('ಮುಕ್ತಾಯ') ||
-        text.includes('ಸಾಕು') ||
-        text.includes('ಕೇಳಬೇಡ') ||
-        text.includes('ಧ್ವನಿ ನಿಲ್ಲಿಸು')
+        matchesAny(
+          'stop listening',
+          'disable voice',
+          'turn off voice',
+          'pause voice',
+          'pause listening',
+          'shut down voice',
+          'stop assistant',
+          'quiet',
+          'shut up',
+          'ನಿಲ್ಲಿಸು',
+          'ನಿಲ್ಲಿಸಿ',
+          'ಮುಕ್ತಾಯ',
+          'ಸಾಕು',
+          'ಕೇಳಬೇಡ',
+          'ಧ್ವನಿ ನಿಲ್ಲಿಸು',
+          'ಧ್ವನಿ ನಿಲ್ಲಿಸಿ'
+        )
       ) {
         setIsContinuous(false)
         stopSpeaking()
@@ -633,23 +725,51 @@ Reasoning: ${activeClaim.reasoning || 'None'}
       }
 
       // Simple Stop / Cancel Speech
-      if (text === 'stop' || text === 'cancel' || text === 'silence') {
+      if (text === 'stop' || text === 'cancel' || text === 'silence' || text === 'ನಿಲ್ಲು') {
         stopSpeaking()
         return
       }
 
-      // 1b. Navigation: Hospital Finder
+      // 2. Read Result Aloud
+      // Requirements: “ಫಲಿತಾಂಶವನ್ನು ಓದಿ” / “ಫಲಿತಾಂಶ ಓದಿ” → Read result aloud
       if (
-        text.includes('hospital') ||
-        text.includes('find hospital') ||
-        text.includes('search hospital') ||
-        text.includes('locate hospital') ||
-        text.includes('nearby care') ||
-        text.includes('clinic') ||
-        text.includes('doctor') ||
-        text.includes('ಆಸ್ಪತ್ರೆ') ||
-        text.includes('ಆಸ್ಪತ್ರೆ ಹುಡುಕಿ') ||
-        text.includes('ಆಸ್ಪತ್ರೆಗಳು')
+        matchesAny(
+          'read result',
+          'read this result',
+          'read aloud',
+          'read claim',
+          'ಫಲಿತಾಂಶವನ್ನು ಓದಿ',
+          'ಫಲಿತಾಂಶ ಓದಿ',
+          'ಫಲಿತಾಂಶವನ್ನು ಹೇಳಿ',
+          'ಫಲಿತಾಂಶ ಹೇಳಿ',
+          'ಫಲಿತಾಂಶ',
+          'ಓದಿ',
+          'ಹೇಳಿ'
+        )
+      ) {
+        readClaimAloud()
+        return
+      }
+
+      // 3. Hospital Finder
+      // Requirements: “ಆಸ್ಪತ್ರೆ” / “ಹಾಸ್ಪಿಟಲ್” → Go to Hospital Finder (/hospitals)
+      if (
+        matchesAny(
+          'hospital',
+          'find hospital',
+          'find hospitals',
+          'search hospital',
+          'locate hospital',
+          'nearby care',
+          'clinic',
+          'doctor',
+          'ಆಸ್ಪತ್ರೆ',
+          'ಆಸ್ಪತ್ರೆಗಳು',
+          'ಆಸ್ಪತ್ರೆ ಹುಡುಕಿ',
+          'ಹಾಸ್ಪಿಟಲ್',
+          'ಹಾಸ್ಪಿಟಲ್ಸ್',
+          'ಹಾಸ್ಪಿಟಲ್ ಹುಡುಕಿ'
+        )
       ) {
         navigate('/hospitals')
         const navMsg =
@@ -660,100 +780,187 @@ Reasoning: ${activeClaim.reasoning || 'None'}
         return
       }
 
-      // 2. Navigation: Home / Audit
+      // 4. Audit Workspace / Home
+      // Requirements: “ಮುಖಪುಟಕ್ಕೆ ಹೋಗಿ” / “ಆಡಿಟ್” → Go to Audit (/audit)
       if (
-        text.includes('go to home') ||
-        text.includes('go home') ||
-        text.includes('go to audit') ||
-        text.includes('open audit') ||
-        text.includes('ಮುಖಪುಟ') ||
-        text.includes('ಆಡಿಟ್')
+        matchesAny(
+          'go to home',
+          'go home',
+          'go to audit',
+          'open audit',
+          'audit',
+          'home',
+          'ಮುಖಪುಟಕ್ಕೆ ಹೋಗಿ',
+          'ಮುಖಪುಟ',
+          'ಆಡಿಟ್',
+          'ಆಡಿಟ್‌'
+        )
       ) {
         navigate('/audit')
-        speak(language === 'kn' ? 'ಮುಖಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Navigating to Audit workspace.')
+        const navMsg = language === 'kn' ? 'ಮುಖಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Navigating to Audit workspace.'
+        speak(navMsg)
         return
       }
 
-      // 3. Navigation: Claims Explorer
+      // 5. Claims Explorer
+      // Requirements: “ಕ್ಲೈಮ್ಗಳು” / “ಕ್ಲೈಮ್‌ಗಳು” → Go to Claims (/claims)
       if (
-        text.includes('go to claims') ||
-        text.includes('show claims') ||
-        text.includes('browse claims') ||
-        text.includes('open claims') ||
-        text.includes('ಕ್ಲೈಮ್')
+        matchesAny(
+          'go to claims',
+          'show claims',
+          'browse claims',
+          'open claims',
+          'claims',
+          'claims explorer',
+          'ಕ್ಲೈಮ್ಗಳು',
+          'ಕ್ಲೈಮ್‌ಗಳು',
+          'ಕ್ಲೈಮ್',
+          'ಕ್ಲೈಮ್ಸ್',
+          'ಕ್ಲೈಮುಗಳು'
+        )
       ) {
         navigate('/claims')
-        speak(language === 'kn' ? 'ಕ್ಲೈಮ್‌ಗಳ ಪಟ್ಟಿಗೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Claims Explorer.')
+        const navMsg = language === 'kn' ? 'ಕ್ಲೈಮ್‌ಗಳ ಪಟ್ಟಿಗೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Claims Explorer.'
+        speak(navMsg)
         return
       }
 
-      // 4. Navigation: Regional Trust Density
+      // 6. Insights Dashboard
+      // Requirements: “ಒಳನೋಟ” / “ಇನ್ಸೈಟ್ಸ್” → Go to Insights (/insights)
       if (
-        text.includes('trust density') ||
-        text.includes('regional trust') ||
-        text.includes('hospital reliability') ||
-        text.includes('ನಂಬಿಕೆ')
-      ) {
-        navigate('/trust-density')
-        speak(language === 'kn' ? 'ಪ್ರಾದೇಶಿಕ ನಂಬಿಕೆ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Regional Trust Density.')
-        return
-      }
-
-      // 5. Navigation: Evaluation Harness
-      if (
-        text.includes('evaluation') ||
-        text.includes('harness') ||
-        text.includes('benchmark') ||
-        text.includes('ಮೌಲ್ಯಮಾಪನ')
-      ) {
-        navigate('/evaluation')
-        speak(language === 'kn' ? 'ಮೌಲ್ಯಮಾಪನ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Evaluation Harness.')
-        return
-      }
-
-      // 5b. Navigation: Insights / Visual Dashboard
-      if (
-        text.includes('insights') ||
-        text.includes('dashboard') ||
-        text.includes('statistics') ||
-        text.includes('visual analytics') ||
-        text.includes('ಗಣಾಂಕ') ||
-        text.includes('ವಿಶ್ಲೇಷಣೆ')
+        matchesAny(
+          'insights',
+          'dashboard',
+          'statistics',
+          'visual analytics',
+          'analytics',
+          'ಒಳನೋಟ',
+          'ಒಳನೋಟಗಳು',
+          'ಇನ್ಸೈಟ್ಸ್',
+          'ಇನ್‌ಸೈಟ್ಸ್',
+          'ಗಣಾಂಕ',
+          'ವಿಶ್ಲೇಷಣೆ'
+        )
       ) {
         navigate('/insights')
-        speak(language === 'kn' ? 'ಗಣಾಂಕ ಮತ್ತು ವಿಶ್ಲೇಷಣೆ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Visual Insights Dashboard.')
+        const navMsg =
+          language === 'kn'
+            ? 'ಒಳನೋಟಗಳು ಮತ್ತು ಗಣಾಂಕಗಳ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.'
+            : 'Opening Visual Insights Dashboard.'
+        speak(navMsg)
         return
       }
 
-      // 6. Navigation: Overview / Welcome
-      if (text.includes('overview') || text.includes('welcome') || text.includes('landing') || text.includes('ವಿವರಣೆ')) {
+      // 7. Community Stories
+      // Requirements: “ಸಮುದಾಯ” / “ಕಥೆಗಳು” → Go to Community Stories (/community)
+      if (
+        matchesAny(
+          'community',
+          'stories',
+          'recovery stories',
+          'patient stories',
+          'ಸಮುದಾಯ',
+          'ಕಥೆಗಳು',
+          'ಕಮ್ಯೂನಿಟಿ'
+        )
+      ) {
+        navigate('/community')
+        const navMsg = language === 'kn' ? 'ಸಮುದಾಯ ಕಥೆಗಳ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Community Stories.'
+        speak(navMsg)
+        return
+      }
+
+      // 8. Log Out
+      // Requirements: “ಲಾಗ್ ಔಟ್” → Log out
+      if (
+        matchesAny(
+          'log out',
+          'logout',
+          'sign out',
+          'signout',
+          'ಲಾಗ್ ಔಟ್',
+          'ಲಾಗೌಟ್',
+          'ಸೈನ್ ಔಟ್',
+          'ಸೈನ್‌ಔಟ್'
+        )
+      ) {
+        const logoutMsg = language === 'kn' ? 'ಖಾತೆಯಿಂದ ಲಾಗ್ ಔಟ್ ಮಾಡಲಾಗುತ್ತಿದೆ.' : 'Signing out of auditor session.'
+        speak(logoutMsg)
+        setTimeout(() => {
+          logout()
+          navigate('/')
+        }, 1200)
+        return
+      }
+
+      // 9. Help
+      // Requirements: “ಸಹಾಯ” / “ಹೆಲ್ಪ್” → Help
+      if (
+        matchesAny(
+          'help',
+          'commands',
+          'what can you do',
+          'options',
+          'ಸಹಾಯ',
+          'ಹೆಲ್ಪ್'
+        )
+      ) {
+        const helpText =
+          language === 'kn'
+            ? 'ನೀವು ಹೀಗೆ ಹೇಳಬಹುದು: ಮುಖಪುಟಕ್ಕೆ ಹೋಗಿ, ಕ್ಲೈಮ್‌ಗಳು, ಆಸ್ಪತ್ರೆ, ಒಳನೋಟ, ಸಮುದಾಯ, ಫಲಿತಾಂಶವನ್ನು ಓದಿ, ಅಥವಾ ಲಾಗ್ ಔಟ್.'
+            : 'You can say: Go to audit, Claims, Hospital finder, Insights, Community stories, Read the result, or Log out.'
+        speak(helpText)
+        return
+      }
+
+      // 10. Regional Trust Density
+      if (
+        matchesAny(
+          'trust density',
+          'regional trust',
+          'hospital reliability',
+          'ನಂಬಿಕೆ',
+          'ಟ್ರಸ್ಟ್'
+        )
+      ) {
+        navigate('/trust-density')
+        const navMsg = language === 'kn' ? 'ಪ್ರಾದೇಶಿಕ ನಂಬಿಕೆ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Regional Trust Density.'
+        speak(navMsg)
+        return
+      }
+
+      // 11. Evaluation Harness
+      if (
+        matchesAny(
+          'evaluation',
+          'harness',
+          'benchmark',
+          'ಮೌಲ್ಯಮಾಪನ',
+          'ಇವಾಲ್ಯುಯೇಷನ್'
+        )
+      ) {
+        navigate('/evaluation')
+        const navMsg = language === 'kn' ? 'ಮೌಲ್ಯಮಾಪನ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Evaluation Harness.'
+        speak(navMsg)
+        return
+      }
+
+      // 12. Landing / Overview
+      if (matchesAny('overview', 'welcome', 'landing', 'ವಿವರಣೆ')) {
         navigate('/welcome')
         speak(language === 'kn' ? 'ವಿವರಣೆ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Platform Overview.')
         return
       }
 
-      // 6b. Navigation: Community Stories
-      if (
-        text.includes('community') ||
-        text.includes('stories') ||
-        text.includes('recovery stories') ||
-        text.includes('ಕಮ್ಯೂನಿಟಿ') ||
-        text.includes('ಕಥೆಗಳು')
-      ) {
-        navigate('/community')
-        speak(language === 'kn' ? 'ಸಮುದಾಯ ಕಥೆಗಳ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.' : 'Opening Community Stories.')
-        return
-      }
-
-      // 7. Filter Flagged Claims / Price Alerts
-      if (text.includes('filter flagged') || text.includes('show flagged') || text.includes('ಫ್ಲ್ಯಾಗ್')) {
+      // 13. Filter Flagged Claims / Price Alerts
+      if (matchesAny('filter flagged', 'show flagged', 'ಫ್ಲ್ಯಾಗ್ ಮಾಡಿದ ಕ್ಲೈಮ್', 'ಫ್ಲ್ಯಾಗ್')) {
         navigate('/claims')
         speak(language === 'kn' ? 'ಫ್ಲ್ಯಾಗ್ ಮಾಡಿದ ಕ್ಲೈಮ್‌ಗಳನ್ನು ತೋರಿಸಲಾಗುತ್ತಿದೆ.' : 'Showing flagged claims.')
         return
       }
 
-      if (text.includes('price alert') || text.includes('price problem') || text.includes('cost anomaly') || text.includes('ಬೆಲೆ')) {
-        if (activeClaim && (text.includes('why') || text.includes('problem') || text.includes('ಏನು'))) {
+      if (matchesAny('price alert', 'price problem', 'cost anomaly', 'ಬೆಲೆ ಎಚ್ಚರಿಕೆ', 'ಬೆಲೆಯ ಸಮಸ್ಯೆ', 'ಬೆಲೆ')) {
+        if (activeClaim && matchesAny('why', 'problem', 'ಏನು', 'ವಿವರಿಸಿ')) {
           await explainClaim('price_problem')
           return
         }
@@ -762,63 +969,21 @@ Reasoning: ${activeClaim.reasoning || 'None'}
         return
       }
 
-      // 8. Document-Aware Queries: Why Flagged?
-      if (
-        text.includes('why flagged') ||
-        text.includes('why was this flagged') ||
-        text.includes('why is this flagged') ||
-        text.includes('ಏಕೆ ಫ್ಲ್ಯಾಗ್')
-      ) {
+      // 14. Document-Aware Queries: Why Flagged?
+      if (matchesAny('why flagged', 'why was this flagged', 'why is this flagged', 'ಏಕೆ ಫ್ಲ್ಯಾಗ್')) {
         await explainClaim('why_flagged')
         return
       }
 
-      // 9. Document-Aware Queries: Explain Claim
-      if (
-        text.includes('explain this claim') ||
-        text.includes('explain claim') ||
-        text.includes('explain this') ||
-        text.includes('ವಿವರಿಸಿ')
-      ) {
+      // 15. Document-Aware Queries: Explain Claim
+      if (matchesAny('explain this claim', 'explain claim', 'explain this', 'ವಿವರಿಸಿ')) {
         await explainClaim('explain')
         return
       }
 
-      // 10. Read Result Aloud
-      if (
-        text.includes('read result') ||
-        text.includes('read this result') ||
-        text.includes('read aloud') ||
-        text.includes('ಓದಿ') ||
-        text.includes('ಹೇಳಿ')
-      ) {
-        readClaimAloud()
-        return
-      }
-
-      // 11. Sign out
-      if (text.includes('log out') || text.includes('sign out') || text.includes('ಲಾಗ್ ಔಟ್') || text.includes('ಸೈನ್ ಔಟ್')) {
-        speak(language === 'kn' ? 'ಖಾತೆಯಿಂದ ಸೈನ್ ಔಟ್ ಮಾಡಲಾಗುತ್ತಿದೆ.' : 'Signing out of auditor session.')
-        setTimeout(() => {
-          logout()
-          navigate('/')
-        }, 1200)
-        return
-      }
-
-      // 12. Help
-      if (text.includes('help') || text.includes('commands') || text.includes('what can you do') || text.includes('ಸಹಾಯ')) {
-        const helpText =
-          language === 'kn'
-            ? 'ನೀವು ಹೀಗೆ ಹೇಳಬಹುದು: ಮುಖಪುಟಕ್ಕೆ ಹೋಗಿ, ಕ್ಲೈಮ್‌ಗಳನ್ನು ತೋರಿಸಿ, ಪ್ರಾದೇಶಿಕ ನಂಬಿಕೆ, ಫಲಿತಾಂಶವನ್ನು ಓದಿ, ಅಥವಾ ಈ ಕ್ಲೈಮ್ ಅನ್ನು ವಿವರಿಸಿ.'
-            : 'You can say: Go to home, Go to claims, Go to trust density, Read the result, Why was this flagged, or Explain this claim.'
-        speak(helpText)
-        return
-      }
-
-      // 13. General query fallback - try Ollama or provide helpful feedback
+      // 16. General Fallback Query
       setStatus('thinking')
-      const generalPrompt = `The user asked: "${recognizedText}". Provide a concise 1-sentence answer about EvidenceBridge healthcare auditing.`
+      const generalPrompt = `The user asked: "${rawText}". Provide a concise 1-sentence answer about EvidenceBridge healthcare auditing.`
       const generalAnswer = await queryLocalOllama(generalPrompt)
 
       if (generalAnswer && language === 'en') {
@@ -826,8 +991,8 @@ Reasoning: ${activeClaim.reasoning || 'None'}
       } else {
         const fallback =
           language === 'kn'
-            ? `ಕ್ಷಮಿಸಿ, "${recognizedText}" ಅರ್ಥವಾಗಲಿಲ್ಲ. ಸಹಾಯಕ್ಕಾಗಿ "ಸಹಾಯ" ಎಂದು ಹೇಳಿ.`
-            : `I heard "${recognizedText}". Try saying "Read the result", "Explain this claim", or "Help".`
+            ? `ಕ್ಷಮಿಸಿ, "${rawText}" ಅರ್ಥವಾಗಲಿಲ್ಲ. ಸಹಾಯಕ್ಕಾಗಿ "ಸಹಾಯ" ಎಂದು ಹೇಳಿ.`
+            : `I heard "${rawText}". Try saying "Read the result", "Explain this claim", or "Help".`
         speak(fallback)
       }
     },

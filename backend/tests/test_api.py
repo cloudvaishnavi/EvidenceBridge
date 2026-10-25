@@ -30,7 +30,16 @@ from app.models.schemas import (
 
 @pytest.fixture
 def client():
-    return TestClient(app)
+    from app.services.auth import (
+        create_access_token,
+        DEMO_USER_ID,
+        DEMO_USER_EMAIL,
+        DEMO_USER_NAME,
+    )
+    c = TestClient(app)
+    token = create_access_token(DEMO_USER_ID, DEMO_USER_EMAIL, DEMO_USER_NAME)
+    c.headers["Authorization"] = f"Bearer {token}"
+    return c
 
 
 def test_root_endpoint(client):

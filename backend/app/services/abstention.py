@@ -191,13 +191,17 @@ class AbstentionPolicyService:
                     }
                 )
 
-        # Rule 5: Significant cost data present ($100+), but no price benchmark found
+        # Rule 5: Significant cost data present ($100+ or ₹8,000+), but no price benchmark found
         if self.abstain_on_unbenchmarked_cost and cost_details.extracted_amount:
             amount = cost_details.extracted_amount
-            if amount >= 100.0 and cost_details.benchmark_max is None:
+            cost_curr = getattr(cost_details, "currency", "INR") or "INR"
+            threshold_amount = 8000.0 if cost_curr == "INR" else 100.0
+            curr_sym = "₹" if cost_curr == "INR" else ("€" if cost_curr == "EUR" else ("£" if cost_curr == "GBP" else "$"))
+
+            if amount >= threshold_amount and cost_details.benchmark_max is None:
                 # If claim has high cost but no benchmark in knowledge base to compare against
                 reason = (
-                    f"Substantial financial charge of ${amount:,.2f} reported, but no public pricing benchmark "
+                    f"Substantial financial charge of {curr_sym}{amount:,.2f} ({cost_curr}) reported, but no public pricing benchmark "
                     f"exists in local knowledge base for entity '{entity}'. Cost fairness cannot be audited."
                 )
                 logger.info(f"Abstention triggered [{AbstentionRule.UNBENCHMARKED_HIGH_COST.value}] for claim {claim.claim_id}: {reason}")
@@ -205,7 +209,7 @@ class AbstentionPolicyService:
                     should_abstain=True,
                     rule_triggered=AbstentionRule.UNBENCHMARKED_HIGH_COST,
                     reason=reason,
-                    details={**audit_details, "extracted_amount": amount, "entity": entity}
+                    details={**audit_details, "extracted_amount": amount, "currency": cost_curr, "entity": entity}
                 )
 
         # Passed all gates: No abstention required

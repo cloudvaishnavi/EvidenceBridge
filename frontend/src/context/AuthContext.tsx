@@ -1,5 +1,14 @@
 import React, { createContext, useContext, useState, useEffect } from 'react'
-import { loginApi, signupApi, demoAuthApi, getMeApi } from '../api/client'
+import {
+  loginApi,
+  signupApi,
+  demoAuthApi,
+  getMeApi,
+  getAuthToken,
+  setAuthToken,
+  TOKEN_STORAGE_KEY,
+  USER_STORAGE_KEY,
+} from '../api/client'
 import type { UserResponse } from '../types'
 
 export interface User {
@@ -15,40 +24,55 @@ interface AuthContextType {
   token: string | null
   isAuthenticated: boolean
   login: (emailOrUsername: string, password: string) => Promise<boolean>
-  signup: (name: string, emailOrUsername: string, password: string, organization?: string) => Promise<boolean>
+  signup: (
+    name: string,
+    emailOrUsername: string,
+    password: string,
+    organization?: string,
+  ) => Promise<boolean>
   demoLogin: () => Promise<void>
   logout: () => void
 }
 
 const AuthContext = createContext<AuthContextType | undefined>(undefined)
 
-const USER_STORAGE_KEY = 'evidencebridge_user'
-const TOKEN_STORAGE_KEY = 'evidencebridge_token'
+function getStoredUser(): User | null {
+  if (typeof window === 'undefined') return null
+  try {
+    const raw =
+      localStorage.getItem(USER_STORAGE_KEY) ||
+      sessionStorage.getItem(USER_STORAGE_KEY)
+    if (raw) return JSON.parse(raw)
+  } catch {
+    // Ignore JSON parse error
+  }
+  return null
+}
+
+function setStoredUser(user: User | null): void {
+  if (typeof window === 'undefined') return
+  try {
+    if (user) {
+      const s = JSON.stringify(user)
+      localStorage.setItem(USER_STORAGE_KEY, s)
+      sessionStorage.setItem(USER_STORAGE_KEY, s)
+    } else {
+      localStorage.removeItem(USER_STORAGE_KEY)
+      sessionStorage.removeItem(USER_STORAGE_KEY)
+    }
+  } catch {
+    // Ignore storage errors
+  }
+}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  const [token, setToken] = useState<string | null>(() => {
-    try {
-      return localStorage.getItem(TOKEN_STORAGE_KEY)
-    } catch {
-      return null
-    }
-  })
-
-  const [user, setUser] = useState<User | null>(() => {
-    try {
-      const saved = localStorage.getItem(USER_STORAGE_KEY)
-      if (saved) {
-        return JSON.parse(saved)
-      }
-    } catch {
-      // ignore JSON parse error
-    }
-    return null
-  })
+  // Synchronously initialize token and user from memory/localStorage/sessionStorage
+  const [token, setToken] = useState<string | null>(() => getAuthToken())
+  const [user, setUser] = useState<User | null>(() => getStoredUser())
 
   // Synchronize user profile with backend on startup if token is present
   useEffect(() => {
-    const activeToken = localStorage.getItem(TOKEN_STORAGE_KEY)
+    const activeToken = getAuthToken()
     if (activeToken) {
       getMeApi()
         .then((profile: UserResponse) => {
@@ -60,31 +84,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             organization: profile.organization,
           }
           setUser(u)
-          localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(u))
+          setStoredUser(u)
         })
-        .catch(() => {
-          // If token verification fails (e.g. invalid or expired), keep cached or clear if 401
+        .catch((err: unknown) => {
+          const status = (err as { status?: number })?.status
+          // If token verification fails with 401 (expired/invalid), clean up
+          if (status === 401) {
+            logout()
+          }
         })
     }
   }, [])
 
-  useEffect(() => {
-    if (user) {
-      localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(user))
-    } else {
-      localStorage.removeItem(USER_STORAGE_KEY)
-    }
-  }, [user])
-
-  useEffect(() => {
-    if (token) {
-      localStorage.setItem(TOKEN_STORAGE_KEY, token)
-    } else {
-      localStorage.removeItem(TOKEN_STORAGE_KEY)
-    }
-  }, [token])
-
-  const login = async (emailOrUsername: string, password: string): Promise<boolean> => {
+  const login = async (
+    emailOrUsername: string,
+    password: string,
+  ): Promise<boolean> => {
     if (!emailOrUsername.trim() || !password.trim()) {
       throw new Error('Please enter both your email/username and password.')
     }
@@ -102,14 +117,22 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         role: authRes.user.role,
         organization: authRes.user.organization,
       }
+      // CRITICAL: Synchronously write token & user before resolving
+      setAuthToken(authRes.access_token)
+      setStoredUser(u)
       setToken(authRes.access_token)
       setUser(u)
       return true
     } catch (err: unknown) {
-      // Fallback for offline demo accounts if backend is unreachable
+      // Fallback for demo logins if network is offline
       const cleanId = emailOrUsername.trim().toLowerCase()
-      if (cleanId === 'demo' || cleanId === 'sarah.chen@stjudehealth.org') {
-        demoLogin()
+      if (
+        cleanId === 'demo' ||
+        cleanId === 'vasavi' ||
+        cleanId === 'vasavi.reviewer@evidencebridge.local' ||
+        cleanId === 'sarah.chen@stjudehealth.org'
+      ) {
+        await demoLogin()
         return true
       }
       throw err
@@ -146,6 +169,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       role: authRes.user.role,
       organization: authRes.user.organization,
     }
+    // CRITICAL: Synchronously write token & user before resolving
+    setAuthToken(authRes.access_token)
+    setStoredUser(u)
     setToken(authRes.access_token)
     setUser(u)
     return true
@@ -161,27 +187,40 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         role: authRes.user.role,
         organization: authRes.user.organization,
       }
+      // CRITICAL: Synchronously write token & user before resolving
+      setAuthToken(authRes.access_token)
+      setStoredUser(u)
       setToken(authRes.access_token)
       setUser(u)
     } catch {
-      // Offline fallback
+      // Offline fallback: use canonical Demo Auditor
       const fallbackDemo: User = {
         id: 'usr_demo_auditor',
-        name: 'Dr. Sarah Chen, MD',
-        email: 'sarah.chen@stjudehealth.org',
-        role: 'Senior Clinical Claims Reviewer',
-        organization: 'St. Jude Metropolitan Health System',
+        name: 'Vasavi',
+        email: 'vasavi.reviewer@evidencebridge.local',
+        role: 'Clinical Claims Reviewer',
+        organization: 'EvidenceBridge Clinical Review Network',
       }
+      setAuthToken('demo_bearer_token')
+      setStoredUser(fallbackDemo)
       setToken('demo_bearer_token')
       setUser(fallbackDemo)
     }
   }
 
   const logout = () => {
+    setAuthToken(null)
+    setStoredUser(null)
     setToken(null)
     setUser(null)
-    localStorage.removeItem(TOKEN_STORAGE_KEY)
-    localStorage.removeItem(USER_STORAGE_KEY)
+    try {
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('evidencebridge_active_audit')
+        localStorage.removeItem('evidencebridge_active_audit')
+      }
+    } catch {
+      // ignore
+    }
   }
 
   return (

@@ -195,10 +195,10 @@ export function AuthModal({
             className="w-full py-2 px-3 bg-sky-600 hover:bg-sky-700 text-white rounded-lg text-xs font-bold shadow-xs transition-all flex items-center justify-center gap-1.5 disabled:opacity-50"
           >
             <span>⚡</span>
-            <span>Sign In as Demo Reviewer (1-Click)</span>
+            <span>Sign In as Demo Reviewer: Vasavi (1-Click)</span>
           </button>
           <div className="text-[10px] text-slate-500 mt-1">
-            Pre-configured session for Dr. Sarah Chen, Senior Clinical Claims Reviewer
+            Pre-configured session for Vasavi, Clinical Claims Reviewer
           </div>
         </div>
 

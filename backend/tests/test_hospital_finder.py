@@ -205,3 +205,138 @@ def test_invalid_location_returns_honest_empty_state(client):
     assert len(data["hospitals"]) == 0
     assert "Unable to locate" in data["disclaimer"]
 
+
+def test_bellary_spelling_returns_ballari_hospitals(client):
+    """Verify Bellary alternate spelling resolves correctly and returns real Ballari hospitals."""
+    response = client.get(
+        "/hospitals/search",
+        params={"city_or_area": "Bellary, Karnataka", "max_distance_km": 35.0},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_results"] >= 2
+    assert "Ballari" in data["query_city"] or "Bellary" in data["query_city"]
+    names = [h["name"] for h in data["hospitals"]]
+    assert any("VIMS" in n or "Vijayanagar" in n for n in names)
+    assert all(h["consultation_fee_currency"] == "INR" for h in data["hospitals"])
+    assert all(h["distance_km"] <= 35.0 for h in data["hospitals"])
+
+
+def test_bengaluru_50km_returns_multiple_real_hospitals(client):
+    """Verify Bengaluru search with 50 km radius returns multiple real hospitals."""
+    response = client.get(
+        "/hospitals/search",
+        params={"city_or_area": "Bengaluru, Karnataka", "max_distance_km": 50.0, "care_type": "Pediatric"},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_results"] >= 3
+    names = [h["name"] for h in data["hospitals"]]
+    assert any("Vanivilas" in n or "Rainbow" in n or "Cloudnine" in n or "Manipal" in n for n in names)
+    assert all(h["consultation_fee_currency"] == "INR" for h in data["hospitals"])
+    assert all(h["distance_km"] <= 50.0 for h in data["hospitals"])
+
+
+def test_indian_city_search_rejects_stale_foreign_coords(client):
+    """CRITICAL REGRESSION TEST: Passing Ballari with stale Atlanta GPS coordinates must reject stale coords."""
+    response = client.get(
+        "/hospitals/search",
+        params={
+            "city_or_area": "Ballari, Karnataka",
+            "lat": 33.7490,
+            "lon": -84.3880,
+            "max_distance_km": 35.0,
+        },
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_results"] >= 2
+    # Coordinates must be reset to Ballari centroid (lat ~ 15.1, lon ~ 76.9), NOT Atlanta (33.7, -84.3)
+    coords = data["search_coordinates"]
+    assert coords is not None
+    assert 14.5 <= coords["lat"] <= 15.5
+    assert 76.0 <= coords["lon"] <= 77.5
+    for h in data["hospitals"]:
+        assert h["distance_km"] <= 35.0
+        assert h["country"] == "IN"
+        assert h["consultation_fee_currency"] == "INR"
+        assert "Atlanta" not in h["name"]
+        assert "Emory" not in h["name"]
+        assert "Grady" not in h["name"]
+
+
+def test_currency_inr_for_all_indian_hospitals(client):
+    """Verify all Indian hospital results strictly use INR currency and no USD."""
+    response = client.get(
+        "/hospitals/search",
+        params={"city_or_area": "Bengaluru, Karnataka", "max_distance_km": 30.0},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_results"] > 0
+    for h in data["hospitals"]:
+        assert h["consultation_fee_currency"] == "INR"
+        for p in h.get("procedure_prices", []):
+            assert p["currency"] == "INR"
+
+
+def test_remote_rural_tiny_radius_returns_honest_empty_state():
+    """Verify a remote location with 1 km radius returns an honest empty state with no foreign fallback."""
+    # Remote location in Thar desert (27.0, 71.0) with tiny 1 km radius
+    res = hospital_finder_service.search_hospitals(
+        lat=27.0,
+        lon=71.0,
+        city_or_area="Remote Desert Point",
+        max_distance_km=1.0,
+    )
+    assert res.total_results == 0
+    assert len(res.hospitals) == 0
+    assert "No registered medical facilities found within 1.0 km" in res.disclaimer
+
+
+def test_davangere_returns_real_hospitals(client):
+    """Verify Davangere search returns real local hospitals with INR currency within radius."""
+    response = client.get(
+        "/hospitals/search",
+        params={"city_or_area": "Davangere, Karnataka", "max_distance_km": 35.0},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_results"] >= 2
+    assert "Davangere" in data["query_city"]
+    names = [h["name"] for h in data["hospitals"]]
+    assert any("Chigateri" in n or "Bapuji" in n or "SS Institute" in n or "City Hospital" in n for n in names)
+    assert all(h["consultation_fee_currency"] == "INR" for h in data["hospitals"])
+    assert all(h["country"] == "IN" for h in data["hospitals"])
+    assert all(h["distance_km"] <= 35.0 for h in data["hospitals"])
+
+
+def test_davangere_60km_radius_coverage(client):
+    """Verify Davangere with 60 km radius returns real nearby facilities."""
+    response = client.get(
+        "/hospitals/search",
+        params={"city_or_area": "Davangere, Karnataka", "max_distance_km": 60.0},
+    )
+    assert response.status_code == 200
+    data = response.json()
+    assert data["total_results"] >= 3
+    assert all(h["consultation_fee_currency"] == "INR" for h in data["hospitals"])
+    assert all(h["distance_km"] <= 60.0 for h in data["hospitals"])
+
+
+def test_common_karnataka_cities_return_real_hospitals(client):
+    """Verify Hubli, Mysuru, and Shivamogga return real local hospitals with INR currency."""
+    for city in ["Hubli, Karnataka", "Mysuru, Karnataka", "Shivamogga, Karnataka"]:
+        response = client.get(
+            "/hospitals/search",
+            params={"city_or_area": city, "max_distance_km": 35.0},
+        )
+        assert response.status_code == 200
+        data = response.json()
+        assert data["total_results"] >= 1, f"Expected hospitals for {city}"
+        assert all(h["consultation_fee_currency"] == "INR" for h in data["hospitals"])
+        assert all(h["country"] == "IN" for h in data["hospitals"])
+        assert all("Atlanta" not in h["name"] and "Emory" not in h["name"] for h in data["hospitals"])
+
+
+

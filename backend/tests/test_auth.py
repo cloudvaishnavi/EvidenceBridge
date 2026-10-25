@@ -47,7 +47,7 @@ def test_demo_auth_session(client):
     assert data["token_type"] == "bearer"
     assert data["user"]["user_id"] == DEMO_USER_ID
     assert data["user"]["email"] == DEMO_USER_EMAIL
-    assert "Sarah Chen" in data["user"]["name"]
+    assert "Vasavi" in data["user"]["name"]
 
 
 def test_auth_signup_flow(client):
@@ -111,7 +111,6 @@ def test_auth_me_unauthorized(client):
 
 def test_user_data_isolation_claims(client):
     """Verify claims listing and insights filtering by user_id."""
-    # User A creates a claim
     token_a = create_access_token("usr_isolated_a", "usera@health.org", "User A")
     token_b = create_access_token("usr_isolated_b", "userb@health.org", "User B")
 
@@ -134,3 +133,126 @@ def test_user_data_isolation_claims(client):
     insights_b = res_b_insights.json()
     assert insights_b["total_claims"] == 0
     assert insights_b["is_baseline_fallback"] is False
+
+
+def test_user_a_cannot_see_user_b_records(client):
+    """Verify User A cannot view User B's claims or stories, even by specifying ID."""
+    token_a = create_access_token("usr_alice", "alice@stjude.org", "Alice")
+    token_b = create_access_token("usr_bob", "bob@stjude.org", "Bob")
+
+    # 1. Bob creates a community story
+    res_story = client.post(
+        "/stories",
+        json={
+            "title": "Bob's Recovery Journey",
+            "story_text": "This is Bob's private recovery story after knee surgery.",
+            "consent_acknowledged": True,
+        },
+        headers={"Authorization": f"Bearer {token_b}"},
+    )
+    assert res_story.status_code == 201
+    bob_story_id = res_story.json()["story_id"]
+
+    # Alice lists stories -> Bob's story must NOT appear in Alice's list
+    res_alice_stories = client.get(
+        "/stories",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert res_alice_stories.status_code == 200
+    alice_story_ids = [s["story_id"] for s in res_alice_stories.json()["stories"]]
+    assert bob_story_id not in alice_story_ids
+
+    # Alice tries to directly query Bob's story by ID -> Rejected with 404
+    res_alice_get_bob = client.get(
+        f"/stories/{bob_story_id}",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert res_alice_get_bob.status_code == 404
+
+    # Alice tries to bypass isolation with query param ?user_id=usr_bob -> 403 Forbidden
+    res_spoof = client.get(
+        "/stories?user_id=usr_bob",
+        headers={"Authorization": f"Bearer {token_a}"},
+    )
+    assert res_spoof.status_code == 403
+    assert "access denied" in res_spoof.json()["detail"].lower()
+
+
+def test_protected_routes_reject_unauthenticated_requests(client):
+    """Verify all sensitive endpoints reject unauthenticated requests with 401."""
+    protected_endpoints = [
+        ("GET", "/claims"),
+        ("GET", "/claims/clm_any"),
+        ("POST", "/extract"),
+        ("POST", "/extract-and-verify"),
+        ("POST", "/verify/clm_any"),
+        ("GET", "/verification/clm_any"),
+        ("GET", "/audit/clm_any"),
+        ("GET", "/audit/verification/ver_any"),
+        ("GET", "/stories"),
+        ("POST", "/stories"),
+        ("GET", "/stories/story_any"),
+        ("GET", "/evaluate"),
+        ("POST", "/evaluate"),
+        ("GET", "/evaluate/eval_any"),
+        ("GET", "/insights/summary"),
+        ("GET", "/auth/me"),
+    ]
+
+    for method, endpoint in protected_endpoints:
+        if method == "GET":
+            res = client.get(endpoint)
+        else:
+            res = client.post(endpoint, json={"text": "test", "title": "test", "story_text": "sample text"})
+        assert res.status_code == 401, f"{method} {endpoint} should return 401 Unauthorized when unauthenticated"
+
+
+def test_demo_account_cannot_access_private_user_data(client):
+    """Verify Demo Auditor cannot access real user's private data."""
+    token_real = create_access_token("usr_real_auditor", "real@hospital.org", "Dr. Real")
+    token_demo = client.post("/auth/demo").json()["access_token"]
+
+    # Real user creates a story
+    res_real_story = client.post(
+        "/stories",
+        json={
+            "title": "Confidential Case Study",
+            "story_text": "Real patient recovery confidential case study notes.",
+            "consent_acknowledged": True,
+        },
+        headers={"Authorization": f"Bearer {token_real}"},
+    )
+    assert res_real_story.status_code == 201
+    real_story_id = res_real_story.json()["story_id"]
+
+    # Demo Auditor lists stories -> Real user's story must NOT be included
+    res_demo_stories = client.get(
+        "/stories",
+        headers={"Authorization": f"Bearer {token_demo}"},
+    )
+    assert res_demo_stories.status_code == 200
+    demo_story_ids = [s["story_id"] for s in res_demo_stories.json()["stories"]]
+    assert real_story_id not in demo_story_ids
+
+    # Demo Auditor directly requests real user's story -> 404
+    res_demo_get_real = client.get(
+        f"/stories/{real_story_id}",
+        headers={"Authorization": f"Bearer {token_demo}"},
+    )
+    assert res_demo_get_real.status_code == 404
+
+
+def test_jwt_secret_from_env(monkeypatch):
+    """Verify JWT secret is dynamically read from environment variable."""
+    import os
+    from app.services.auth import get_auth_secret_key, create_access_token, decode_access_token
+
+    custom_secret = "my_custom_super_secure_env_jwt_secret_2026_test"
+    monkeypatch.setenv("AUTH_SECRET_KEY", custom_secret)
+
+    assert get_auth_secret_key() == custom_secret
+
+    token = create_access_token("usr_env_test", "env@test.org", "Env Tester")
+    payload = decode_access_token(token)
+    assert payload is not None
+    assert payload["sub"] == "usr_env_test"

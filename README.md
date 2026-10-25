@@ -291,7 +291,9 @@ cp .env.example .env
 Default configuration values in `.env`:
 ```env
 APP_NAME=EvidenceBridge
+APP_ENV=development
 PORT=8000
+ALLOWED_ORIGINS=http://localhost:5173,http://127.0.0.1:5173
 MONGODB_URL=mongodb://localhost:27017
 # Or for MongoDB Atlas deployment (Never commit real credentials to git):
 # MONGODB_URI=mongodb+srv://USER:PASS@cluster.mongodb.net/evidencebridge
@@ -325,7 +327,7 @@ Open your browser at `http://localhost:5173`.
 
 ### 7. Instant 1-Click Interactive Demo
 - Open `http://localhost:5173`.
-- Click **⚡ Demo Auditor** in the top navigation bar to sign in instantly as *Dr. Sarah Chen, MD (Senior Clinical Claims Reviewer)* with zero configuration.
+- Click **⚡ Demo (Vasavi)** in the top navigation bar to sign in instantly as *Vasavi (Clinical Claims Reviewer)* with zero configuration.
 - On the **Audit Claim** workspace, select any pre-configured scenario (e.g., *Normal Saline $720 Overcharge*, *Brain MRI $650*, *Bronchitis Antibiotics $24*) to run a live end-to-end audit.
 - Inspect the 7-stage cryptographic audit trail or click **🔊 Read Result Aloud** to experience the AI voice assistant.
 
@@ -742,7 +744,7 @@ EvidenceBridge includes an elevated, local-first web UI inspired by clean, profe
   - 3-Step verification roadmap and 4 controlled scenario quick-cards (Routine Metformin, Brain MRI w/o contrast, Saline overcharge, Bronchitis antibiotics).
 - **Lightweight Auditor Authentication**:
   - Supports email/username + password login and sign-up with persistent `localStorage` session state.
-  - **1-Click Demo Auditor**: Instantly logs in as *Dr. Sarah Chen, MD (Senior Clinical Claims Reviewer)* with zero configuration.
+  - **1-Click Demo Auditor**: Instantly logs in as *Vasavi (Clinical Claims Reviewer)* with zero configuration.
   - Header profile pill displaying active reviewer name, avatar initials, role, and sign-out action.
 - **Audit & Extraction Workspace (`/audit`)**:
   - Stepped 3-phase workflow: 1. Input Clinical Note / Bill Line, 2. Review Extracted Information, 3. View Decision & Evidence.
@@ -826,7 +828,7 @@ EvidenceBridge includes a production-grade authentication and personal memory ar
   - Audited claims, submitted Community Stories, and evaluation executions are attributed to the user's `user_id`.
   - Claims explorer, personal audit logs, and insight metrics reflect each user's unique audit history without cross-tenant leakage.
 - **Instant Demo Reviewer Access**:
-  - The built-in Demo Auditor session (*Dr. Sarah Chen, Senior Clinical Claims Reviewer*) is pre-seeded with baseline demonstration claims, benchmark datasets, and regional records for instant evaluation.
+  - The built-in Demo Auditor session (*Vasavi, Clinical Claims Reviewer*) is pre-seeded with baseline demonstration claims, benchmark datasets, and regional records for instant evaluation.
 - **Zero-Config Offline Fallback**:
   - When running without a live database or during CI unit testing, an in-memory cache preserves authentication state and test users seamlessly.
 
@@ -845,7 +847,46 @@ MONGODB_URI=mongodb+srv://USER:PASS@cluster.mongodb.net/evidencebridge
 AUTH_SECRET_KEY=generate-a-strong-random-secret-key-32-characters
 AUTH_ALGORITHM=HS256
 AUTH_ACCESS_TOKEN_EXPIRE_MINUTES=1440
+
+# Production CORS Origin Security
+APP_ENV=production
+ALLOWED_ORIGINS=https://your-frontend-domain.com,https://app.your-frontend-domain.com
 ```
+
+### Production CORS & Cross-Origin Security
+
+EvidenceBridge enforces explicit origin whitelisting when credentials (Bearer JWT tokens) are enabled, complying strictly with W3C Cross-Origin Resource Sharing specifications.
+
+- **Local Development (`APP_ENV=development`)**: Automatically authorizes local development servers (`http://localhost:5173`, `http://127.0.0.1:5173`, `http://localhost:3000`).
+- **Production (`APP_ENV=production`)**: Only permits explicitly listed frontend origins configured in `ALLOWED_ORIGINS`. Never uses wildcard (`*`) when credentials are enabled, preventing unauthorized cross-origin data exposure.
+
+### Frontend Production Deployment & API Base URL Configuration
+
+When deploying the React/Vite frontend to a decoupled hosting platform (e.g. Netlify, Vercel, Render, Cloudflare Pages, AWS S3/CloudFront):
+
+1. **Configure Backend Endpoint**: Set the environment variable `VITE_API_BASE_URL` in your hosting dashboard:
+   ```env
+   # Format: https://<your-backend-host>/api/v1 (no trailing slash)
+   VITE_API_BASE_URL=https://api.evidencebridge.org/api/v1
+   ```
+   If omitted or left empty, the application defaults to `/api/v1`, using Vite's local dev reverse proxy to target `http://localhost:8000`.
+
+2. **Optional Hosted Ollama Endpoint**: To use an external or hosted Ollama service for AI voice synthesis explanations:
+   ```env
+   VITE_OLLAMA_BASE_URL=https://ollama.evidencebridge.org
+   ```
+   If unset, the voice assistant operates with high-quality deterministic natural language synthesis in both English and Kannada, avoiding browser mixed-content blocks.
+
+3. **SPA Client-Side Routing Fallback**: EvidenceBridge includes out-of-the-box routing fallback configurations so page refreshes and direct links (e.g. `/audit`, `/claims`, `/hospitals`, `/insights`) resolve properly:
+   - **Netlify**: Handled automatically via `frontend/public/_redirects` (`/*  /index.html  200`).
+   - **Vercel**: Configured via `frontend/vercel.json` rewrites.
+
+4. **Production Build**:
+   ```bash
+   cd frontend
+   npm run build
+   ```
+   The compiled static assets will be output to `frontend/dist/`.
 
 > [!CAUTION]
 > **Strict Secret Protection**: Never commit actual database connection strings, passwords, or authentication keys to source control or logs. EvidenceBridge automatically masks and sanitizes database connection logging to guarantee credentials are never exposed in terminal outputs or diagnostic traces.
@@ -856,7 +897,7 @@ AUTH_ACCESS_TOKEN_EXPIRE_MINUTES=1440
 |---|---|---|
 | `POST` | `/auth/signup` | Register a new auditor account (Name, Email, Password, optional Organization) |
 | `POST` | `/auth/login` | Authenticate with email and password to receive a signed JWT token |
-| `POST` | `/auth/demo` | 1-Click instant sign-in as Dr. Sarah Chen (Demo Auditor) |
+| `POST` | `/auth/demo` | 1-Click instant sign-in as Vasavi (Demo Auditor) |
 | `GET` | `/auth/me` | Inspect the currently authenticated auditor profile and session validity |
 
 ---

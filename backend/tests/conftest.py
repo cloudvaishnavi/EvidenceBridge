@@ -4,6 +4,7 @@ Pytest configuration and shared fixtures for EvidenceBridge tests.
 
 from datetime import datetime, timezone
 import os
+os.environ["TESTING"] = "1"
 import sys
 from pathlib import Path
 import pytest

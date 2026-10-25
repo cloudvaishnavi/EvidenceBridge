@@ -72,6 +72,64 @@ US_STATES: dict[str, str] = {
 # Reverse lookup set of valid 2-letter postal abbreviations
 US_STATE_CODES = set(US_STATES.values())
 
+# Prominent Indian States & Union Territories
+INDIAN_STATES: dict[str, str] = {
+    "karnataka": "KA",
+    "maharashtra": "MH",
+    "tamil nadu": "TN",
+    "telangana": "TG",
+    "andhra pradesh": "AP",
+    "kerala": "KL",
+    "delhi": "DL",
+    "gujarat": "GJ",
+    "rajasthan": "RJ",
+    "west bengal": "WB",
+    "uttar pradesh": "UP",
+    "goa": "GA",
+    "punjab": "PB",
+    "haryana": "HR",
+    "bihar": "BR",
+    "madhya pradesh": "MP",
+    "odisha": "OD",
+}
+INDIAN_STATE_CODES = set(INDIAN_STATES.values())
+
+# Prominent Indian Metros & Karnataka Hubs
+PROMINENT_INDIAN_CITIES: dict[str, str] = {
+    "bengaluru": "KA",
+    "bangalore": "KA",
+    "ballari": "KA",
+    "bellary": "KA",
+    "mysuru": "KA",
+    "mysore": "KA",
+    "davangere": "KA",
+    "davanagere": "KA",
+    "hubballi": "KA",
+    "hubli": "KA",
+    "dharwad": "KA",
+    "hubli_dharwad": "KA",
+    "hubballi_dharwad": "KA",
+    "hubli-dharwad": "KA",
+    "hubballi-dharwad": "KA",
+    "mangaluru": "KA",
+    "mangalore": "KA",
+    "belagavi": "KA",
+    "belgaum": "KA",
+    "kalaburagi": "KA",
+    "gulbarga": "KA",
+    "shivamogga": "KA",
+    "shimoga": "KA",
+    "tumakuru": "KA",
+    "tumkur": "KA",
+    "mumbai": "MH",
+    "pune": "MH",
+    "chennai": "TN",
+    "hyderabad": "TG",
+    "delhi": "DL",
+    "new delhi": "DL",
+    "kolkata": "WB",
+}
+
 # Prominent US Metros / Cities with default states when only city is mentioned
 PROMINENT_CITIES: dict[str, str] = {
     "atlanta": "GA",
@@ -109,16 +167,15 @@ def normalize_location_key(city: str, state_or_region: Optional[str] = None) -> 
     """
     Produce a canonical, lowercase snake_case location key.
     Examples:
+        - normalize_location_key("Bengaluru", "Karnataka") -> "bengaluru_ka"
+        - normalize_location_key("Ballari", "KA") -> "ballari_ka"
+        - normalize_location_key("Davangere", None) -> "davangere_ka" (via PROMINENT_INDIAN_CITIES)
         - normalize_location_key("Houston", "TX") -> "houston_tx"
-        - normalize_location_key("Chicago", "Illinois") -> "chicago_il"
-        - normalize_location_key("Atlanta, GA") -> "atlanta_ga"
-        - normalize_location_key("Seattle", None) -> "seattle_wa" (via PROMINENT_CITIES)
-        - normalize_location_key("UnknownCity", None) -> "unknowncity"
     """
     if not city:
         return ""
 
-    # If city contains a comma like "Atlanta, GA", split it
+    # If city contains a comma like "Bengaluru, Karnataka" or "Atlanta, GA", split it
     if "," in city and not state_or_region:
         parts = city.split(",", 1)
         city = parts[0].strip()
@@ -131,15 +188,22 @@ def normalize_location_key(city: str, state_or_region: Optional[str] = None) -> 
     state_code: Optional[str] = None
     if state_or_region:
         st_clean = re.sub(r"[^\w\s]", "", state_or_region).strip().lower()
-        if st_clean.upper() in US_STATE_CODES:
+        if st_clean.upper() in INDIAN_STATE_CODES:
+            state_code = st_clean.lower()
+        elif st_clean in INDIAN_STATES:
+            state_code = INDIAN_STATES[st_clean].lower()
+        elif st_clean.upper() in US_STATE_CODES:
             state_code = st_clean.lower()
         elif st_clean in US_STATES:
             state_code = US_STATES[st_clean].lower()
         else:
             state_code = re.sub(r"\s+", "_", st_clean)
 
-    # Fallback to known city mapping if state not provided
-    if not state_code and city_clean in PROMINENT_CITIES:
+    # Fallback to known Indian city mapping if state not provided
+    if not state_code and city_clean in PROMINENT_INDIAN_CITIES:
+        state_code = PROMINENT_INDIAN_CITIES[city_clean].lower()
+    # Fallback to known US city mapping if state not provided
+    elif not state_code and city_clean in PROMINENT_CITIES:
         state_code = PROMINENT_CITIES[city_clean].lower()
 
     if state_code:
@@ -205,6 +269,19 @@ class LocationService:
                 normalized_key=key,
                 raw_mention=clean_str,
             )
+
+        # Check for Indian prominent city mention
+        for city_name, st_code in PROMINENT_INDIAN_CITIES.items():
+            if re.search(rf"\b{re.escape(city_name)}\b", clean_str, re.IGNORECASE):
+                formatted_city = city_name.replace("_", " ").replace("-", " ").title()
+                key = normalize_location_key(city_name, st_code)
+                return LocationInfo(
+                    city=formatted_city,
+                    state_or_region=st_code,
+                    country="IN",
+                    normalized_key=key,
+                    raw_mention=clean_str,
+                )
 
         # Check for known prominent city mention
         for city_name, st_code in PROMINENT_CITIES.items():
@@ -282,7 +359,20 @@ class LocationService:
                     raw_mention=m_full.group(0),
                 )
 
-        # Step 4: Search text for prominent cities preceded by prepositions
+        # Step 4: Search text for prominent Indian cities
+        for city_name, st_code in PROMINENT_INDIAN_CITIES.items():
+            if re.search(rf"\b{re.escape(city_name)}\b", text, re.IGNORECASE):
+                formatted_city = city_name.replace("_", " ").replace("-", " ").title()
+                key = normalize_location_key(city_name, st_code)
+                return LocationInfo(
+                    city=formatted_city,
+                    state_or_region=st_code,
+                    country="IN",
+                    normalized_key=key,
+                    raw_mention=city_name,
+                )
+
+        # Step 5: Search text for prominent US cities preceded by prepositions
         m_prom = self._pattern_prominent_city.search(text)
         if m_prom:
             city_match = m_prom.group(1).strip().lower()

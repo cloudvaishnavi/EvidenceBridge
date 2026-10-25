@@ -9,9 +9,21 @@ import type { TrustDensityMetrics, LocationInsight } from '../types'
 import { TrustDensityPanel } from '../components/TrustDensityPanel'
 import { TrustTierBadge } from '../components/VerificationBadge'
 
+// Canonical Indian Regional Cities
+const QUICK_SELECT_CITIES = [
+  { key: 'bengaluru_ka', label: 'Bengaluru', shortName: 'Bengaluru' },
+  { key: 'ballari_ka', label: 'Ballari', shortName: 'Ballari' },
+  { key: 'mysuru_ka', label: 'Mysuru', shortName: 'Mysuru' },
+  { key: 'davangere_ka', label: 'Davangere', shortName: 'Davangere' },
+  { key: 'hubli_ka', label: 'Hubli / Dharwad', shortName: 'Hubli' },
+  { key: 'mangaluru_ka', label: 'Mangaluru', shortName: 'Mangaluru' },
+  { key: 'belagavi_ka', label: 'Belagavi', shortName: 'Belagavi' },
+]
+
 export default function TrustDensity() {
   const [searchParams, setSearchParams] = useSearchParams()
-  const initialKey = searchParams.get('key') || ''
+  // Default to Bengaluru if no key is in search params
+  const initialKey = searchParams.get('key') || 'bengaluru_ka'
 
   const [locationKey, setLocationKey] = useState(initialKey)
   const [selectedMetrics, setSelectedMetrics] = useState<TrustDensityMetrics | null>(null)
@@ -24,14 +36,19 @@ export default function TrustDensity() {
   const [sortBy, setSortBy] = useState<'density_score' | 'volume'>('density_score')
   const [error, setError] = useState<string | null>(null)
 
-  // Load all tracked locations
+  // Load all tracked Indian locations
   const loadLocationList = async (sort: 'density_score' | 'volume') => {
     setLoadingList(true)
     try {
       const res = await listTrustDensity({ limit: 50, sort_by: sort })
-      setLocations(res.locations)
+      // Strictly filter out any foreign/US records
+      const indianLocations = (res.locations || []).filter((loc) => {
+        const key = loc.location_key.toLowerCase()
+        return !['houston_tx', 'chicago_il', 'cleveland_oh', 'atlanta_ga', 'denver_co', 'boston_ma', 'san_francisco_ca'].includes(key)
+      })
+      setLocations(indianLocations)
     } catch {
-      // ok if none exist yet
+      // Ok if error occurs
     } finally {
       setLoadingList(false)
     }
@@ -42,11 +59,30 @@ export default function TrustDensity() {
     if (!key.trim()) return
     setLoadingSelected(true)
     setError(null)
+
+    // Normalize input key
+    let normalized = key.trim().toLowerCase().replace(/\s+/g, '_')
+    if (normalized === 'hubli' || normalized === 'dharwad' || normalized === 'hubballi') {
+      normalized = 'hubli_ka'
+    } else if (normalized === 'bengaluru' || normalized === 'bangalore') {
+      normalized = 'bengaluru_ka'
+    } else if (normalized === 'ballari' || normalized === 'bellary') {
+      normalized = 'ballari_ka'
+    } else if (normalized === 'mysuru' || normalized === 'mysore') {
+      normalized = 'mysuru_ka'
+    } else if (normalized === 'davangere' || normalized === 'davanagere') {
+      normalized = 'davangere_ka'
+    } else if (normalized === 'mangaluru' || normalized === 'mangalore') {
+      normalized = 'mangaluru_ka'
+    } else if (normalized === 'belagavi' || normalized === 'belgaum') {
+      normalized = 'belagavi_ka'
+    }
+
     try {
-      const res = await getTrustDensity(key.trim().toLowerCase())
+      const res = await getTrustDensity(normalized)
       setSelectedMetrics(res.metrics)
       setSelectedInsight(res.insight)
-      setSearchParams({ key: key.trim().toLowerCase() })
+      setSearchParams({ key: normalized })
     } catch (err: unknown) {
       setError(
         err instanceof Error
@@ -95,22 +131,57 @@ export default function TrustDensity() {
   }
 
   return (
-    <div className="space-y-8 max-w-5xl mx-auto">
+    <div className="space-y-8 max-w-5xl mx-auto font-sans">
       {/* Page Header */}
       <div>
-        <div className="inline-flex items-center gap-2 px-2.5 py-0.5 rounded-full bg-sky-50 text-sky-800 text-[11px] font-bold uppercase tracking-wider mb-1.5 border border-sky-200">
-          Geographic Analytics
+        <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-sky-50 text-sky-800 text-[11px] font-bold uppercase tracking-wider mb-2 border border-sky-200">
+          🇮🇳 India Geographic Health Analytics
         </div>
         <h1 className="text-2xl sm:text-3xl font-black text-slate-900 tracking-tight">
-          Regional Hospital Reliability Score
+          Regional Hospital Reliability &amp; Trust Index
         </h1>
-        <p className="text-xs sm:text-sm text-slate-500 mt-1 max-w-2xl leading-relaxed">
-          How reliable are billing and clinical practices in this geographic area? We monitor clinical guideline adherence, pricing anomaly rates, and audit volume across metropolitan areas.
+        <p className="text-xs sm:text-sm text-slate-600 mt-1 max-w-3xl leading-relaxed">
+          How reliable are hospital billing and treatment practices across Indian cities? We continuously audit
+          conformance to medical guidelines (ICMR, WHO), monitor excessive pricing markups, and verify outpatient
+          fee transparency across key healthcare corridors.
         </p>
       </div>
 
-      {/* Search Bar & Metro Switcher */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-6 shadow-card">
+      {/* Plain-Language Explanatory Guide Box */}
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3.5 bg-gradient-to-br from-slate-50 to-sky-50/40 p-4 sm:p-5 rounded-2xl border border-sky-100 shadow-2xs">
+        <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1">
+          <div className="flex items-center gap-2 font-bold text-xs text-emerald-900">
+            <span>🛡️</span>
+            <span>Reliability Score</span>
+          </div>
+          <p className="text-[11px] text-slate-600 leading-relaxed">
+            A score from <strong>0% to 100%</strong> measuring how consistently hospitals in this city adhere to medical treatment standards and charge fair, benchmarked prices.
+          </p>
+        </div>
+
+        <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1">
+          <div className="flex items-center gap-2 font-bold text-xs text-amber-900">
+            <span>⚠️</span>
+            <span>Price Alert Rate</span>
+          </div>
+          <p className="text-[11px] text-slate-600 leading-relaxed">
+            The percentage of audited claims that showed <strong>unusually high markups</strong> compared to government tariffs and state healthcare benchmarks.
+          </p>
+        </div>
+
+        <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs space-y-1">
+          <div className="flex items-center gap-2 font-bold text-xs text-slate-800">
+            <span>⏸️</span>
+            <span>Preliminary &bull; Safe Limits</span>
+          </div>
+          <p className="text-[11px] text-slate-600 leading-relaxed">
+            Cities with fewer than <strong>5 audited claims</strong> are marked as preliminary so users are never misled by small or incomplete data samples.
+          </p>
+        </div>
+      </div>
+
+      {/* Search Bar & City Selector */}
+      <div className="bg-white rounded-2xl border border-slate-200 p-5 sm:p-6 shadow-card space-y-4">
         <form
           onSubmit={handleSearchSubmit}
           className="flex flex-col sm:flex-row items-stretch sm:items-center gap-3"
@@ -120,7 +191,7 @@ export default function TrustDensity() {
               type="text"
               value={locationKey}
               onChange={(e) => setLocationKey(e.target.value)}
-              placeholder="Enter canonical key, e.g. 'houston_tx', 'chicago_il', 'cleveland_oh'..."
+              placeholder="Search Indian city key, e.g. bengaluru_ka, ballari_ka, mysuru_ka, davangere_ka..."
               className="w-full px-4 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono text-slate-800 placeholder:text-slate-400 bg-slate-50/50"
             />
           </div>
@@ -130,25 +201,30 @@ export default function TrustDensity() {
             disabled={loadingSelected || !locationKey.trim()}
             className="px-6 py-2.5 rounded-xl bg-sky-600 text-white text-xs sm:text-sm font-bold hover:bg-sky-700 transition-colors shadow-md disabled:opacity-50"
           >
-            {loadingSelected ? 'Auditing Locality...' : 'Audit Metro'}
+            {loadingSelected ? 'Auditing Locality...' : 'Audit City'}
           </button>
         </form>
 
         {/* Quick Suggestion Pills */}
-        <div className="flex items-center gap-2 mt-4 text-xs text-slate-500 flex-wrap">
-          <span className="font-semibold text-slate-700">Quick Select:</span>
-          {['houston_tx', 'chicago_il', 'atlanta_ga', 'cleveland_oh', 'denver_co'].map(
-            (k) => (
+        <div className="flex items-center gap-2 text-xs text-slate-500 flex-wrap pt-1">
+          <span className="font-bold text-slate-700">Quick Select:</span>
+          {QUICK_SELECT_CITIES.map((c) => {
+            const isSelected = selectedMetrics?.location_key === c.key || locationKey.toLowerCase().includes(c.shortName.toLowerCase())
+            return (
               <button
-                key={k}
+                key={c.key}
                 type="button"
-                onClick={() => handleSelectLocation(k)}
-                className="px-3 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-800 font-mono text-xs font-semibold transition-colors"
+                onClick={() => handleSelectLocation(c.key)}
+                className={`px-3 py-1.5 rounded-xl font-bold text-xs transition-all ${
+                  isSelected
+                    ? 'bg-sky-600 text-white shadow-xs'
+                    : 'bg-slate-100 hover:bg-sky-50 text-slate-700 hover:text-sky-800 border border-slate-200'
+                }`}
               >
-                {k}
+                📍 {c.label} ({c.key})
               </button>
             )
-          )}
+          })}
         </div>
       </div>
 
@@ -161,8 +237,12 @@ export default function TrustDensity() {
       )}
 
       {error && !loadingSelected && (
-        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs sm:text-sm">
-          <strong>Notice:</strong> {error}
+        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200 text-amber-900 text-xs sm:text-sm flex items-start gap-2.5">
+          <span className="text-amber-600 font-bold text-base mt-0.5">⚠️</span>
+          <div>
+            <strong className="block font-bold">Notice:</strong>
+            <span>{error}</span>
+          </div>
         </div>
       )}
 
@@ -175,15 +255,15 @@ export default function TrustDensity() {
         />
       )}
 
-      {/* All Tracked Localities Table */}
+      {/* All Tracked Indian Localities Table */}
       <div className="bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-card">
         <div className="px-6 py-4 bg-slate-50 border-b border-slate-200 flex flex-col sm:flex-row justify-between sm:items-center gap-3">
           <div>
             <h2 className="text-xs sm:text-sm font-bold text-slate-900 uppercase tracking-wider">
-              Tracked Metropolitan Localities ({locations.length})
+              Tracked Indian Healthcare Hubs ({locations.length})
             </h2>
             <p className="text-[11px] text-slate-500 mt-0.5">
-              Comparative reliability index and price anomaly rates across regions
+              Comparative reliability index and price anomaly rates across Karnataka and Indian regional cities
             </p>
           </div>
 
@@ -216,7 +296,7 @@ export default function TrustDensity() {
 
         {loadingList ? (
           <div className="p-8 text-center text-xs text-slate-400 animate-pulse">
-            Loading locality database...
+            Loading Indian locality database...
           </div>
         ) : locations.length === 0 ? (
           <div className="p-12 text-center">
@@ -236,8 +316,7 @@ export default function TrustDensity() {
                   <th className="px-6 py-3.5">Metropolitan Area</th>
                   <th className="px-6 py-3.5">Reliability Tier</th>
                   <th className="px-6 py-3.5">Reliability Score</th>
-                  <th className="px-6 py-3.5 text-center">Total Claims</th>
-                  <th className="px-6 py-3.5 text-center">Audited</th>
+                  <th className="px-6 py-3.5 text-center">Audited Claims</th>
                   <th className="px-6 py-3.5 text-center">Price Alert Rate</th>
                   <th className="px-6 py-3.5 text-right">Action</th>
                 </tr>
@@ -273,7 +352,7 @@ export default function TrustDensity() {
                       <td className="px-6 py-4">
                         <div className="flex items-center gap-2">
                           <span className="font-mono font-bold text-slate-900 w-12 text-xs">
-                            {loc.density_score.toFixed(3)}
+                            {scorePct}%
                           </span>
                           <div className="w-20 bg-slate-100 h-2 rounded-full overflow-hidden">
                             <div
@@ -293,19 +372,15 @@ export default function TrustDensity() {
                       </td>
 
                       <td className="px-6 py-4 text-center font-mono text-slate-700">
-                        {loc.total_claims}
-                      </td>
-
-                      <td className="px-6 py-4 text-center font-mono text-slate-700">
                         {loc.verified_claims}
                       </td>
 
                       <td className="px-6 py-4 text-center font-mono">
                         <span
-                          className={`font-bold ${
-                            loc.cost_anomaly_rate > 0.3
-                              ? 'text-rose-600'
-                              : 'text-slate-700'
+                          className={`font-bold px-2 py-0.5 rounded text-[11px] ${
+                            loc.cost_anomaly_rate > 0.2
+                              ? 'bg-amber-100 text-amber-900'
+                              : 'bg-emerald-50 text-emerald-800'
                           }`}
                         >
                           {anomalyPct}%
@@ -314,7 +389,7 @@ export default function TrustDensity() {
 
                       <td className="px-6 py-4 text-right">
                         <span className="text-xs font-bold text-sky-600 hover:text-sky-800">
-                          Inspect &rarr;
+                          View Deep-Dive &rarr;
                         </span>
                       </td>
                     </tr>

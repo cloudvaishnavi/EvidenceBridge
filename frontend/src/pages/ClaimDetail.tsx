@@ -5,6 +5,7 @@ import type { Claim, VerificationResult, AuditTrail } from '../types'
 import { VerificationBadge, VerdictBadge } from '../components/VerificationBadge'
 import { AuditTrailViewer } from '../components/AuditTrailViewer'
 import { useVoice } from '../context/VoiceContext'
+import { formatCurrency } from '../utils/currency'
 
 export default function ClaimDetail() {
   const { claimId } = useParams<{ claimId: string }>()
@@ -109,17 +110,7 @@ export default function ClaimDetail() {
   }
 
   const formatDocCurrency = (amount: number, currency = 'USD') => {
-    const cur = (currency || 'USD').toUpperCase()
-    if (cur === 'INR') {
-      return `₹${amount.toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    }
-    if (cur === 'EUR') {
-      return `€${amount.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    }
-    if (cur === 'GBP') {
-      return `£${amount.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    }
-    return `$${amount.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
+    return formatCurrency(amount, currency)
   }
 
   if (loading) {
@@ -356,7 +347,11 @@ export default function ClaimDetail() {
               </div>
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
                 <span className="text-slate-400 block mb-0.5 text-[11px]">Billed Charge</span>
-                <span className="font-mono font-bold text-slate-900">{fields?.cost_range || 'None listed'}</span>
+                <span className="font-mono font-bold text-slate-900">
+                  {fields?.cost_range
+                    ? `${fields.cost_range}${fields.cost_currency ? ` (${fields.cost_currency})` : ''}`
+                    : 'Price data not available'}
+                </span>
               </div>
               <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
                 <span className="text-slate-400 block mb-0.5 text-[11px]">Extraction Confidence</span>
@@ -493,9 +488,19 @@ export default function ClaimDetail() {
                 <p className="leading-relaxed text-rose-900 text-xs">
                   {anomaly.explanation}
                 </p>
-                <div className="font-mono text-[11px] text-rose-800 pt-2 border-t border-rose-200/80">
-                  Benchmark: {formatDocCurrency(anomaly.benchmark_min ?? 0, anomaly.currency || 'USD')} – {formatDocCurrency(anomaly.benchmark_max ?? 0, anomaly.currency || 'USD')}
+                <div className="font-mono text-[11px] text-rose-800 pt-2 border-t border-rose-200/80 flex justify-between items-center flex-wrap gap-1">
+                  <span>
+                    Benchmark: {formatCurrency(anomaly.benchmark_min, anomaly.benchmark_currency || anomaly.currency || 'INR')} – {formatCurrency(anomaly.benchmark_max, anomaly.benchmark_currency || anomaly.currency || 'INR')}
+                  </span>
+                  <span className="font-bold">
+                    Billed: {formatCurrency(anomaly.extracted_amount, anomaly.currency || 'INR', { showCode: true })}
+                  </span>
                 </div>
+                {anomaly.benchmark_currency && anomaly.currency && anomaly.benchmark_currency !== anomaly.currency && (
+                  <div className="text-[11px] text-amber-800 bg-amber-100/70 p-1.5 rounded border border-amber-200">
+                    Billed in {anomaly.currency}, benchmark published in {anomaly.benchmark_currency}.
+                  </div>
+                )}
               </div>
             )}
 

@@ -41,6 +41,10 @@ class ExtractedFields(BaseModel):
         None,
         description="Billed charge, copay, price range, or financial figure if mentioned (e.g. '$1,200', '$4,500 - $6,000')"
     )
+    cost_currency: Optional[str] = Field(
+        None,
+        description="Explicit ISO-4217 currency code (e.g. 'INR', 'USD', 'EUR', 'GBP') if cost is mentioned"
+    )
     location_city: Optional[str] = Field(
         None,
         description="City, state, or hospital/facility name if present in text"
@@ -257,6 +261,7 @@ class CostAnomalyDetails(BaseModel):
     is_anomaly: bool = False
     benchmark_matched: bool = False
     currency: str = "USD"
+    benchmark_currency: Optional[str] = None
     extracted_amount: Optional[float] = None
     benchmark_min: Optional[float] = None
     benchmark_max: Optional[float] = None
@@ -658,6 +663,8 @@ class CommunityStoryCreate(BaseModel):
     story_text: str = Field(..., min_length=10, max_length=5000, description="Personal story and what helped cope or recover")
     author_name: Optional[str] = Field("Community Member", max_length=80, description="Name or alias")
     condition_or_topic: Optional[str] = Field(None, max_length=100, description="Optional topic or condition tag")
+    location: Optional[str] = Field(None, max_length=100, description="Optional city, region, or hospital location")
+    category: Optional[str] = Field(None, max_length=50, description="Optional category tag, e.g. Billing, Prescription, Recovery")
     contact_email: Optional[str] = Field(None, max_length=120, description="Optional voluntary public email")
     contact_instagram: Optional[str] = Field(None, max_length=80, description="Optional voluntary public Instagram handle")
     consent_acknowledged: bool = Field(True, description="Confirmation that story and contact will be public")
@@ -673,11 +680,14 @@ class CommunityStory(BaseModel):
     story_text: str
     author_name: str = "Community Member"
     condition_or_topic: Optional[str] = None
+    location: Optional[str] = None
+    category: Optional[str] = None
     contact_email: Optional[str] = None
     contact_instagram: Optional[str] = None
     consent_acknowledged: bool = True
     created_at: datetime = Field(default_factory=lambda: datetime.now(timezone.utc))
     user_id: Optional[str] = Field(None, description="User ID of author if authenticated")
+    is_demo: Optional[bool] = Field(False, description="Whether this is a system-curated demo story")
 
 
 class CommunityStoryListResponse(BaseModel):
@@ -746,6 +756,7 @@ class ClaimHighlight(BaseModel):
     action: str
     verdict: Optional[str] = None
     cost_range: Optional[str] = None
+    cost_currency: Optional[str] = None
     reason: Optional[str] = None
     timestamp: Optional[datetime] = None
 

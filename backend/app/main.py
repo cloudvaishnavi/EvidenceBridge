@@ -22,26 +22,38 @@ async def lifespan(app: FastAPI) -> AsyncGenerator[None, None]:
     """Application lifespan manager: connect to MongoDB and vector store on startup."""
     logger.info(f"Starting {settings.APP_NAME} v{settings.APP_VERSION} [{settings.APP_ENV}]")
 
-    # Connect to MongoDB
-    try:
-        await storage_service.connect()
-    except Exception as e:
-        logger.warning(f"Could not connect to MongoDB at startup: {e}")
+    import os
+    is_testing = bool(os.getenv("TESTING") or os.getenv("PYTEST_CURRENT_TEST"))
 
-    # Initialize ChromaDB vector store
-    try:
-        vector_store_service.initialize()
-    except Exception as e:
-        logger.warning(f"Could not initialize ChromaDB vector store at startup: {e}")
+    if not is_testing:
+        # Connect to MongoDB
+        try:
+            await storage_service.connect()
+        except Exception as e:
+            logger.warning(f"Could not connect to MongoDB at startup: {e}")
+
+        if not storage_service.is_connected and settings.APP_ENV.lower() == "production":
+            logger.warning(
+                "[PRODUCTION WARNING] MongoDB persistent storage is NOT connected. "
+                "EvidenceBridge is operating in ephemeral in-memory fallback mode. "
+                "Data will not persist across server restarts or multi-process workers."
+            )
+
+        # Initialize ChromaDB vector store
+        try:
+            vector_store_service.initialize()
+        except Exception as e:
+            logger.warning(f"Could not initialize ChromaDB vector store at startup: {e}")
 
     yield
 
     # Clean shutdown
-    logger.info(f"Shutting down {settings.APP_NAME}...")
-    try:
-        await storage_service.close()
-    except Exception as e:
-        logger.warning(f"Error while closing storage service: {e}")
+    if not is_testing:
+        logger.info(f"Shutting down {settings.APP_NAME}...")
+        try:
+            await storage_service.close()
+        except Exception as e:
+            logger.warning(f"Error while closing storage service: {e}")
 
 
 app = FastAPI(
@@ -58,10 +70,10 @@ app = FastAPI(
     redoc_url="/redoc",
 )
 
-# Enable CORS for local-first testing
+# Enable production-secure CORS with explicit origin allowlist and credential support
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.cors_allowed_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],

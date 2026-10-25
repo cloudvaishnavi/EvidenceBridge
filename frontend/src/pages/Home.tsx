@@ -2,6 +2,7 @@ import { useState, useEffect } from 'react'
 import { getHealth } from '../api/client'
 import ExtractVerifyForm from '../components/ExtractVerifyForm'
 import type { HealthResponse } from '../types'
+import { useAudit } from '../context/AuditContext'
 
 interface SampleCase {
   label: string
@@ -12,9 +13,77 @@ interface SampleCase {
 
 const SAMPLE_CASES: SampleCase[] = [
   {
-    label: 'Saline IV Overcharge ($720)',
+    label: 'Saline IV Infusion Markup (₹1,800)',
     category: 'Markup Flag',
-    description: '16× hospital markup on routine commodity IV fluid',
+    description: '15× markup on routine emergency IV fluid exceeding NPPA national ceiling price benchmark (₹105)',
+    text: `EMERGENCY DEPARTMENT CHARGE SUMMARY
+MANIPAL HOSPITAL - BENGALURU, KARNATAKA
+Patient: Ramesh Kumar (Acct #MH-BLR-2026-4412)
+
+Item: 0.9% Sodium Chloride (Normal Saline) 1,000 mL IV infusion bag for emergency rehydration.
+Billed Charge: ₹1,800.00
+Clinical Note: Emergency IV hydration administered for acute gastroenteritis dehydration.`,
+  },
+  {
+    label: 'Type 2 Diabetes Rx - Metformin (₹75)',
+    category: 'Approved',
+    description: 'First-line diabetes maintenance therapy conforming to ICMR & RSSDI clinical guidelines',
+    text: `CLINICAL OUTPATIENT CONSULTATION & PRESCRIPTION
+APOLLO CLINIC - DAVANGERE, KARNATAKA
+Patient: 52-year-old male with confirmed Type 2 Diabetes Mellitus (HbA1c 7.8%).
+
+Rx Prescribed:
+1. Tab. Metformin Hydrochloride 500 mg (Glycomet)
+   Dosage & Instructions: Take 1 tablet twice daily after meals (morning and night) with water for 30 days (60 tablets).
+
+Total Pharmacy Billed Charge: ₹75.00
+Clinical Assessment: First-line oral monotherapy initiated per standard ICMR/RSSDI diabetes guidelines.`,
+  },
+  {
+    label: 'Acute Bronchitis Rx - Antibiotic (₹450)',
+    category: 'Guideline Flag',
+    description: 'Antibiotic overprescription flagged: ICMR advises against routine antibiotics for viral bronchitis',
+    text: `DISTRICT CIVIL HOSPITAL - OUTPATIENT PRESCRIPTION
+DISTRICT HOSPITAL - BALLARI, KARNATAKA
+Patient: 34-year-old male presenting with acute uncomplicated bronchitis, low-grade fever, and non-productive cough for 4 days.
+
+Rx Prescribed:
+1. Tab. Azithromycin 500 mg (Zithromax)
+   Dosage & Instructions: Take 1 tablet orally once daily 1 hour before meals for 5 days.
+2. Tab. Paracetamol 650 mg (Dolo)
+   Dosage & Instructions: Take 1 tablet as needed (SOS) for fever/body ache every 6-8 hours after food.
+
+Total Pharmacy Charge: ₹450.00
+Clinical Note: Empirical antibiotic therapy initiated for viral bronchitis without secondary infection.`,
+  },
+  {
+    label: 'Diagnostic Brain MRI Scan (₹5,500)',
+    category: 'Approved',
+    description: 'Appropriate neuroimaging conforming to CGHS benchmark tariff and neurological criteria',
+    text: `NEUROLOGY CONSULTATION & IMAGING ORDER
+KMC HOSPITAL (KASTURBA MEDICAL COLLEGE) - MANGALURU, KARNATAKA
+Patient: 46-year-old female presenting with progressive unilateral headache, papilledema, and new focal neurological signs.
+
+Procedure: CPT 70551 Magnetic Resonance Imaging (MRI) Brain without contrast.
+Total Billed Charge: ₹5,500.00
+Clinical Indication: Urgent neuroimaging indicated to evaluate focal intracranial pathology per clinical guidelines.`,
+  },
+  {
+    label: 'Uncoded Experimental Therapy (₹85,000)',
+    category: 'Safe Abstain',
+    description: 'Safe refusal: High-cost experimental therapy without established NPPA/CGHS tariff benchmarks',
+    text: `REGENERATIVE MEDICINE SPECIALTY SUITE
+CITY SUPER SPECIALITY HOSPITAL - BELAGAVI, KARNATAKA
+Patient: 58-year-old with refractory degenerative musculoskeletal pain.
+
+Administered: Autologous experimental cellular restorative therapy protocol.
+Total Billed Charge: ₹85,000.00
+Clinical Note: Off-label experimental regenerative restorative session administered without standard procedure code.`,
+  },
+  {
+    label: 'US Emergency Normal Saline ($720 USD)',
+    category: 'Markup Flag',
+    description: 'Foreign currency demonstration: 16× markup evaluated against CMS Medicare USD schedule',
     text: `EMERGENCY ROOM CHARGE SUMMARY
 MIDWEST REGIONAL MEDICAL CENTER - CLEVELAND, OH
 Patient: Jane Doe (Acct #MR-2024-99120)
@@ -22,55 +91,6 @@ Patient: Jane Doe (Acct #MR-2024-99120)
 Supply Item: 0.9% Sodium Chloride (Normal Saline) 1,000 mL IV infusion bag for emergency hydration.
 Billed Charge: $720.00
 Clinical Note: Emergency administration of normal saline for acute dehydration following gastroenteritis.`,
-  },
-  {
-    label: 'Routine Diabetes Metformin ($15)',
-    category: 'Approved',
-    description: 'First-line standard of care conforming to ADA guidelines',
-    text: `CLINICAL VISIT NOTE
-METROPOLITAN INTERNAL MEDICINE CLINIC - CHICAGO, IL
-Patient: 54-year-old male with confirmed diagnosis of Type 2 Diabetes Mellitus (HbA1c 7.9%).
-
-Prescription: Metformin hydrochloride 500 mg orally twice daily with meals (60 tablets, 30-day supply).
-Total Pharmacy Cost: $15.00
-Clinical Assessment: First-line pharmacotherapy initiated per standard diabetes clinical guidelines.`,
-  },
-  {
-    label: 'Brain MRI for Severe Headache ($650)',
-    category: 'Approved',
-    description: 'Neurological indication matching ACR appropriateness criteria',
-    text: `OUTPATIENT NEUROLOGY CONSULTATION & IMAGING ORDER
-HOUSTON METHODIST HOSPITAL - HOUSTON, TX
-Patient: 48-year-old female presenting with progressive unilateral headache, papilledema, and new focal neurological deficit.
-
-Procedure: CPT 70551 Magnetic Resonance Imaging (MRI) Brain without contrast.
-Total Billed Facility Charge: $650.00
-Clinical Indication: Neuroimaging indicated to rule out intracranial mass or acute cerebrovascular lesion.`,
-  },
-  {
-    label: 'Bronchitis Antibiotic ($24)',
-    category: 'Guideline Flag',
-    description: 'Inappropriate antibiotic for uncomplicated viral bronchitis',
-    text: `URGENT CARE CLINIC ENCOUNTER
-ATLANTA HEALTHCARE PARTNERS - ATLANTA, GA
-Patient: 32-year-old presenting with 4-day history of non-productive cough, afebrile, lungs clear to auscultation.
-
-Diagnosis: Acute viral bronchitis without complications.
-Prescription: Azithromycin 250 mg (Z-Pak, 6 tablets total).
-Total Billed Charge: $24.00
-Clinical Note: Prescribed antibiotic for symptomatic cough relief.`,
-  },
-  {
-    label: 'Novel Unbenchmarked Therapy ($45,000)',
-    category: 'Safe Abstain',
-    description: 'High-cost experimental treatment without reference benchmarks',
-    text: `SPECIALTY INFUSION SUITE
-PACIFIC ADVANCED MEDICINE - SAN FRANCISCO, CA
-Patient: 61-year-old with refractory musculoskeletal pain.
-
-Administered: Experimental synthetic peptide bioregulator infusion (3-day cycle).
-Total Billed Charge: $45,000.00
-Clinical Note: Off-label regenerative cellular restorative therapy administered per compassionate protocol.`,
   },
 ]
 
@@ -81,8 +101,7 @@ export default function Home() {
     data?: HealthResponse
   }>({ loading: true, ok: false })
 
-  const [selectedText, setSelectedText] = useState('')
-  const [activePreset, setActivePreset] = useState<string | null>(null)
+  const { activePreset, setText: setAuditText, setActivePreset } = useAudit()
 
   useEffect(() => {
     let active = true
@@ -99,7 +118,7 @@ export default function Home() {
   }, [])
 
   const handleSelectSample = (sample: SampleCase) => {
-    setSelectedText(sample.text)
+    setAuditText(sample.text)
     setActivePreset(sample.label)
   }
 
@@ -114,7 +133,7 @@ export default function Home() {
           Audit Clinical Notes &amp; Hospital Bills
         </h1>
         <p className="mt-2.5 text-base text-slate-600 leading-relaxed">
-          Paste any hospital bill line, itemized charge, or patient chart. EvidenceBridge verifies clinical indications against medical guidelines and audits charges against regional pricing benchmarks.
+          Upload a bill photo, take a camera snapshot, or paste any clinical chart note or itemized hospital charge. EvidenceBridge extracts document text with OCR, verifies clinical indications against medical guidelines, and audits charges against regional pricing benchmarks.
         </p>
       </div>
 
@@ -127,7 +146,7 @@ export default function Home() {
           <div>
             <div className="text-sm font-bold text-slate-800">Input Document</div>
             <div className="text-xs text-slate-500 mt-1 leading-normal">
-              Paste bill text, EHR notes, or select a pre-filled sample case.
+              Upload a bill photo, take a picture with camera, paste text, or select a sample case.
             </div>
           </div>
         </div>
@@ -172,7 +191,6 @@ export default function Home() {
             <button
               type="button"
               onClick={() => {
-                setSelectedText('')
                 setActivePreset(null)
               }}
               className="text-xs text-slate-400 hover:text-slate-600 font-medium"
@@ -222,13 +240,7 @@ export default function Home() {
       </div>
 
       {/* Main Extract & Verify Form */}
-      <ExtractVerifyForm
-        initialText={selectedText}
-        onSampleCleared={() => {
-          setSelectedText('')
-          setActivePreset(null)
-        }}
-      />
+      <ExtractVerifyForm />
     </div>
   )
 }

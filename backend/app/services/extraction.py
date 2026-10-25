@@ -19,8 +19,18 @@ class ExtractionError(Exception):
     pass
 
 
-class OllamaConnectionError(ExtractionError):
+class LLMConnectionError(ExtractionError):
+    """Base exception raised when an LLM provider cannot be reached."""
+    pass
+
+
+class OllamaConnectionError(LLMConnectionError):
     """Raised when local Ollama instance cannot be reached."""
+    pass
+
+
+class GeminiConnectionError(LLMConnectionError):
+    """Raised when Google Gemini API cannot be reached or credentials are invalid."""
     pass
 
 
@@ -51,16 +61,45 @@ STRICT RULES:
 
 
 class ExtractionService:
-    """Service to communicate with local Ollama LLM and parse structured claims."""
+    """Service to communicate with LLM providers (Gemini or Ollama) and parse structured claims."""
 
-    def __init__(self, base_url: Optional[str] = None, model: Optional[str] = None):
+    def __init__(
+        self,
+        base_url: Optional[str] = None,
+        model: Optional[str] = None,
+        provider: Optional[str] = None,
+    ):
         self.settings = get_settings()
+        self.provider = (provider or self.settings.LLM_PROVIDER).lower()
+
+        # Gemini configuration
+        self.gemini_model = model or self.settings.GEMINI_MODEL
+        self.gemini_base_url = (base_url or self.settings.GEMINI_BASE_URL).rstrip("/")
+        self.gemini_api_key = self.settings.GEMINI_API_KEY
+        self.gemini_timeout = self.settings.GEMINI_TIMEOUT_SECONDS
+
+        # Ollama configuration
         self.base_url = (base_url or self.settings.OLLAMA_BASE_URL).rstrip("/")
         self.model = model or self.settings.OLLAMA_MODEL
         self.timeout = self.settings.OLLAMA_TIMEOUT_SECONDS
 
     async def check_health(self) -> dict[str, Any]:
-        """Check if local Ollama server is running and which models are available."""
+        """Check if configured LLM provider is available."""
+        if self.provider == "gemini":
+            if not self.gemini_api_key or not self.gemini_api_key.strip():
+                return {
+                    "status": "unhealthy",
+                    "provider": "gemini",
+                    "configured_model": self.gemini_model,
+                    "error": "GEMINI_API_KEY is not configured.",
+                }
+            return {
+                "status": "healthy",
+                "provider": "gemini",
+                "configured_model": self.gemini_model,
+                "model_ready": True,
+            }
+
         url = f"{self.base_url}/api/tags"
         try:
             async with httpx.AsyncClient(timeout=5.0) as client:
@@ -71,6 +110,7 @@ class ExtractionService:
                     model_found = any(self.model in m for m in available_models)
                     return {
                         "status": "healthy",
+                        "provider": "ollama",
                         "base_url": self.base_url,
                         "configured_model": self.model,
                         "model_ready": model_found,
@@ -78,6 +118,7 @@ class ExtractionService:
                     }
                 return {
                     "status": "unhealthy",
+                    "provider": "ollama",
                     "status_code": response.status_code,
                     "error": response.text
                 }
@@ -85,6 +126,7 @@ class ExtractionService:
             logger.warning(f"Ollama health check failed: {e}")
             return {
                 "status": "unreachable",
+                "provider": "ollama",
                 "base_url": self.base_url,
                 "configured_model": self.model,
                 "error": str(e)
@@ -92,12 +134,85 @@ class ExtractionService:
 
     async def extract_structured_claim(self, text: str) -> tuple[ExtractedFields, float]:
         """
-        Send text to local Ollama model with structured JSON enforcement.
+        Send text to configured LLM (Gemini or Ollama) with structured JSON enforcement.
         Returns a tuple of (ExtractedFields, confidence_score).
         """
-        logger.info(f"Extracting structured claim with model '{self.model}' (text length: {len(text)})")
         prompt = f"{EXTRACTION_SYSTEM_PROMPT}\n\nINPUT TEXT TO EXTRACT:\n\"\"\"{text.strip()}\"\"\"\n\nOUTPUT JSON:"
 
+        if self.provider == "gemini":
+            raw_response_text = await self._call_gemini_extraction(prompt, text_len=len(text))
+        else:
+            raw_response_text = await self._call_ollama_extraction(prompt, text_len=len(text))
+
+        extracted_fields, confidence = self._parse_and_validate_json(raw_response_text, text)
+        return extracted_fields, confidence
+
+    async def _call_gemini_extraction(self, prompt: str, text_len: int) -> str:
+        """Call Google Gemini generateContent API and return raw JSON response text."""
+        if not self.gemini_api_key or not self.gemini_api_key.strip():
+            msg = "GEMINI_API_KEY is not configured or missing."
+            logger.error(msg)
+            raise GeminiConnectionError(msg)
+
+        logger.info(f"Extracting structured claim with Gemini model '{self.gemini_model}' (text length: {text_len})")
+        url = f"{self.gemini_base_url}/models/{self.gemini_model}:generateContent"
+        headers = {
+            "Content-Type": "application/json",
+            "x-goog-api-key": self.gemini_api_key,
+        }
+        payload = {
+            "contents": [
+                {
+                    "parts": [{"text": prompt}]
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.1,
+                "responseMimeType": "application/json",
+            },
+        }
+
+        try:
+            async with httpx.AsyncClient(timeout=self.gemini_timeout) as client:
+                response = await client.post(url, headers=headers, json=payload)
+                if response.status_code != 200:
+                    error_msg = f"Gemini API returned HTTP {response.status_code}: {response.text}"
+                    logger.error(error_msg)
+                    if response.status_code in (401, 403):
+                        raise GeminiConnectionError(f"Gemini API authentication failed (HTTP {response.status_code}). Check GEMINI_API_KEY.")
+                    raise ExtractionError(error_msg)
+
+                data = response.json()
+                candidates = data.get("candidates", [])
+                if not candidates:
+                    raise ExtractionError("Gemini API returned 0 candidate completions.")
+
+                first_candidate = candidates[0]
+                content = first_candidate.get("content", {})
+                parts = content.get("parts", [])
+                if not parts or "text" not in parts[0]:
+                    raise ExtractionError("Gemini API candidate missing text content.")
+
+                return parts[0]["text"]
+
+        except (GeminiConnectionError, ExtractionError):
+            raise
+        except httpx.ConnectError as e:
+            msg = f"Cannot connect to Gemini API endpoint at {self.gemini_base_url}: {e}"
+            logger.error(msg)
+            raise GeminiConnectionError(msg) from e
+        except httpx.TimeoutException as e:
+            msg = f"Gemini API request timed out after {self.gemini_timeout}s."
+            logger.error(msg)
+            raise ExtractionError(msg) from e
+        except Exception as e:
+            msg = f"Gemini API request failed: {e}"
+            logger.error(msg)
+            raise ExtractionError(msg) from e
+
+    async def _call_ollama_extraction(self, prompt: str, text_len: int) -> str:
+        """Call local Ollama /api/generate and return raw response string."""
+        logger.info(f"Extracting structured claim with Ollama model '{self.model}' (text length: {text_len})")
         payload = {
             "model": self.model,
             "prompt": prompt,
@@ -108,9 +223,7 @@ class ExtractionService:
                 "top_p": 0.9,
             }
         }
-
         url = f"{self.base_url}/api/generate"
-
         try:
             async with httpx.AsyncClient(timeout=self.timeout) as client:
                 response = await client.post(url, json=payload)
@@ -123,8 +236,7 @@ class ExtractionService:
                     raise ExtractionError(error_msg)
 
                 raw_data = response.json()
-                raw_response_text = raw_data.get("response", "")
-
+                return raw_data.get("response", "")
         except httpx.ConnectError as e:
             msg = (
                 f"Cannot connect to local Ollama server at {self.base_url}. "
@@ -139,6 +251,9 @@ class ExtractionService:
             )
             logger.error(msg)
             raise ExtractionError(msg) from e
+        except Exception as e:
+            logger.error(f"Ollama extraction request failed: {e}")
+            raise ExtractionError(f"Ollama extraction error: {e}")
 
         extracted_fields, confidence = self._parse_and_validate_json(raw_response_text, text)
         return extracted_fields, confidence
@@ -238,8 +353,14 @@ class ExtractionService:
         lines = [line.strip() for line in original_input.splitlines() if line.strip()]
         first_line = lines[0] if lines else "Medical Encounter"
 
-        # Regex detect currency/cost
-        cost_match = re.search(r"\$\s*[\d,]+(?:\.\d{2})?(?:\s*-\s*\$?\s*[\d,]+(?:\.\d{2})?)?", original_input)
+        # Regex detect currency/cost across currencies ($, ₹, €, £, Rs, INR, USD, EUR, GBP)
+        cost_match = re.search(
+            r"(?:[\$₹€£]\s*[\d,]+(?:\.\d{1,2})?(?:\s*-\s*[\$₹€£]?\s*[\d,]+(?:\.\d{1,2})?)?|"
+            r"(?:rs\.?|inr|usd|eur|gbp)\s*[\d,]+(?:\.\d{1,2})?|"
+            r"[\d,]+(?:\.\d{1,2})?\s*(?:usd|inr|eur|gbp|dollars?|rupees?))",
+            original_input,
+            re.IGNORECASE
+        )
         cost_range = cost_match.group(0).strip() if cost_match else None
 
         extracted = ExtractedFields(

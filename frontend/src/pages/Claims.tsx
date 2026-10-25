@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react'
-import { listClaims, getVerification } from '../api/client'
+import { listClaims, getVerification, ensureAuthToken } from '../api/client'
 import type { Claim, VerificationResult } from '../types'
 import { ClaimCard } from '../components/ClaimCard'
 
@@ -22,6 +22,7 @@ export default function Claims() {
     setLoading(true)
     setError(null)
     try {
+      await ensureAuthToken()
       const res = await listClaims({
         limit,
         skip: currentSkip,
@@ -189,7 +190,7 @@ export default function Claims() {
                 type="text"
                 value={locationQuery}
                 onChange={(e) => setLocationQuery(e.target.value)}
-                placeholder="City (e.g. houston_tx)"
+                placeholder="City (e.g. bengaluru_ka)"
                 className="px-3 py-2 rounded-xl border border-slate-300 text-xs w-36 focus:outline-none focus:ring-2 focus:ring-sky-500 font-mono"
               />
               <button
@@ -205,8 +206,18 @@ export default function Claims() {
 
       {/* Error state */}
       {error && (
-        <div className="p-4 rounded-xl bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm">
-          Failed to load claims: {error}
+        <div className="p-4 rounded-2xl bg-rose-50 border border-rose-200 text-rose-900 text-xs sm:text-sm flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-xs">
+          <div>
+            <div className="font-bold">Could not load claims</div>
+            <div className="text-xs text-rose-700 mt-0.5">{error}</div>
+          </div>
+          <button
+            type="button"
+            onClick={() => loadClaims(skip, locationQuery)}
+            className="px-3.5 py-1.5 rounded-lg bg-rose-600 hover:bg-rose-700 text-white font-bold text-xs whitespace-nowrap transition-colors"
+          >
+            Retry
+          </button>
         </div>
       )}
 

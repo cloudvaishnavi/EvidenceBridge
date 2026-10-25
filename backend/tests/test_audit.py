@@ -477,7 +477,15 @@ def test_end_to_end_extract_verify_and_fetch_audit_trail():
     from fastapi.testclient import TestClient
     from app.main import app
 
+    from app.services.auth import (
+        create_access_token,
+        DEMO_USER_ID,
+        DEMO_USER_EMAIL,
+        DEMO_USER_NAME,
+    )
     client = TestClient(app)
+    token = create_access_token(DEMO_USER_ID, DEMO_USER_EMAIL, DEMO_USER_NAME)
+    client.headers["Authorization"] = f"Bearer {token}"
     now = datetime.now(timezone.utc)
 
     # 1. Build a realistic 7-stage audit trail

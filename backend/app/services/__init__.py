@@ -7,7 +7,13 @@ from app.services.abstention import (
 )
 from app.services.audit import AuditService, audit_service
 from app.services.cost_anomaly import CostAnomalyService, cost_anomaly_service
-from app.services.extraction import ExtractionError, ExtractionService, OllamaConnectionError
+from app.services.extraction import (
+    ExtractionError,
+    ExtractionService,
+    GeminiConnectionError,
+    LLMConnectionError,
+    OllamaConnectionError,
+)
 from app.services.provenance import ProvenanceService
 from app.services.storage import StorageError, StorageService, storage_service
 from app.services.vector_store import VectorStoreService, vector_store_service
@@ -24,6 +30,8 @@ __all__ = [
     "cost_anomaly_service",
     "ExtractionError",
     "ExtractionService",
+    "GeminiConnectionError",
+    "LLMConnectionError",
     "OllamaConnectionError",
     "ProvenanceService",
     "StorageError",

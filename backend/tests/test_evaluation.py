@@ -240,7 +240,15 @@ class TestEvaluationAPI:
     """Tests for Layer 6 FastAPI routes (/evaluate)."""
 
     def setup_method(self):
+        from app.services.auth import (
+            create_access_token,
+            DEMO_USER_ID,
+            DEMO_USER_EMAIL,
+            DEMO_USER_NAME,
+        )
         self.client = TestClient(app)
+        token = create_access_token(DEMO_USER_ID, DEMO_USER_EMAIL, DEMO_USER_NAME)
+        self.client.headers["Authorization"] = f"Bearer {token}"
 
     def test_post_evaluate_endpoint_offline(self):
         """POST /evaluate should trigger an evaluation run and return report."""

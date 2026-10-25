@@ -33,6 +33,7 @@ export interface ExtractedFields {
   entity: string
   effect_or_outcome: string | null
   cost_range: string | null
+  cost_currency?: string | null
   location_city: string | null
   sentiment: SentimentType
   reasoning: string | null
@@ -82,6 +83,7 @@ export interface CostAnomalyDetails {
   is_anomaly: boolean
   benchmark_matched?: boolean
   currency?: string | null
+  benchmark_currency?: string | null
   extracted_amount: number | null
   benchmark_min: number | null
   benchmark_max: number | null
@@ -368,10 +370,13 @@ export interface CommunityStory {
   story_text: string
   author_name: string
   condition_or_topic?: string | null
+  location?: string | null
+  category?: string | null
   contact_email?: string | null
   contact_instagram?: string | null
   consent_acknowledged: boolean
   created_at: string
+  is_demo?: boolean
 }
 
 export interface CommunityStoryCreate {
@@ -379,6 +384,8 @@ export interface CommunityStoryCreate {
   story_text: string
   author_name?: string
   condition_or_topic?: string
+  location?: string
+  category?: string
   contact_email?: string
   contact_instagram?: string
   consent_acknowledged: boolean
@@ -442,6 +449,7 @@ export interface ClaimHighlight {
   action: string
   verdict?: string | null
   cost_range?: string | null
+  cost_currency?: string | null
   reason?: string | null
   timestamp?: string | null
 }

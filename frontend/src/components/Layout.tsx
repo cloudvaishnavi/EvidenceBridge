@@ -1,6 +1,6 @@
 import { useState, useEffect, useRef } from 'react'
 import { NavLink, Outlet, useNavigate, useLocation } from 'react-router-dom'
-import { getHealth } from '../api/client'
+import { getHealth, API_BASE } from '../api/client'
 import type { HealthResponse } from '../types'
 import { useAuth } from '../context/AuthContext'
 import { useVoice } from '../context/VoiceContext'
@@ -13,6 +13,7 @@ export default function Layout() {
   const { setIsOpen: setVoiceOpen, setIsEnabled: setIsVoiceEnabled } = useVoice()
   const navigate = useNavigate()
   const location = useLocation()
+  const [profileModalOpen, setProfileModalOpen] = useState(false)
   const [authModalOpen, setAuthModalOpen] = useState(false)
   const [authModalMode, setAuthModalMode] = useState<'login' | 'signup'>('login')
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false)
@@ -201,7 +202,7 @@ export default function Layout() {
                     ? 'Checking backend status...'
                     : health.ok
                     ? `Backend Online (${health.data?.app_name || 'FastAPI'} v${health.data?.version || '0.1'})`
-                    : 'Backend Offline at http://localhost:8000'
+                    : `Backend Offline (${API_BASE})`
                 }
               >
                 <span
@@ -241,19 +242,24 @@ export default function Layout() {
               {/* User Authentication Pill & Always-Visible Sign Out */}
               {isAuthenticated && user ? (
                 <div className="flex items-center gap-1.5">
-                  <div
-                    className="flex items-center gap-1.5 py-0.5 px-1.5 sm:px-2 rounded-lg bg-slate-50 border border-slate-200 shadow-2xs"
-                    title={`${user.name} (${user.role})`}
+                  <button
+                    type="button"
+                    onClick={() => setProfileModalOpen(true)}
+                    className="flex items-center gap-1.5 py-1 px-2 rounded-xl bg-slate-50 hover:bg-slate-100 border border-slate-200 shadow-2xs transition-colors cursor-pointer group text-left"
+                    title="Click to view profile details"
                   >
-                    <div className="w-6 h-6 rounded-full bg-clinical-600 text-white font-bold text-[10px] flex items-center justify-center flex-shrink-0">
-                      {getUserInitials(user.name) || 'MD'}
+                    <div className="w-6 h-6 rounded-full bg-clinical-600 group-hover:bg-clinical-700 text-white font-bold text-[10px] flex items-center justify-center flex-shrink-0 transition-colors">
+                      {getUserInitials(user.name) || 'V'}
                     </div>
                     <div className="text-left hidden sm:block max-w-[110px]">
                       <div className="text-xs font-bold text-slate-800 leading-tight truncate">
                         {user.name}
                       </div>
+                      <div className="text-[9px] text-slate-500 font-medium leading-none truncate">
+                        {user.role}
+                      </div>
                     </div>
-                  </div>
+                  </button>
 
                   {/* Sign Out Button - Always visible in the top bar */}
                   <button
@@ -289,10 +295,13 @@ export default function Layout() {
                   </button>
                   <button
                     type="button"
-                    onClick={() => demoLogin()}
+                    onClick={async () => {
+                      await demoLogin()
+                    }}
                     className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-xs transition-colors whitespace-nowrap"
+                    title="1-click demo login as Vasavi (Clinical Claims Reviewer)"
                   >
-                    <span>⚡ Demo</span>
+                    <span>⚡ Demo (Vasavi)</span>
                   </button>
                 </div>
               )}
@@ -383,6 +392,81 @@ export default function Layout() {
         initialMode={authModalMode}
         onClose={() => setAuthModalOpen(false)}
       />
+
+      {/* User Profile Modal */}
+      {profileModalOpen && user && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-xs animate-in fade-in duration-150">
+          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl border border-slate-200 relative animate-in zoom-in-95 duration-150">
+            {/* Close Button */}
+            <button
+              type="button"
+              onClick={() => setProfileModalOpen(false)}
+              className="absolute top-4 right-4 text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition-colors"
+              title="Close modal"
+            >
+              ✕
+            </button>
+
+            {/* Profile Header */}
+            <div className="flex items-center gap-4 mb-5">
+              <div className="w-14 h-14 rounded-2xl bg-gradient-to-tr from-clinical-600 to-sky-500 text-white font-black text-xl flex items-center justify-center shadow-md">
+                {getUserInitials(user.name) || 'V'}
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <h3 className="text-lg font-black text-slate-900">{user.name}</h3>
+                  <span className="px-2 py-0.5 rounded-md text-[10px] font-extrabold bg-emerald-50 text-emerald-800 border border-emerald-200">
+                    Verified
+                  </span>
+                </div>
+                <p className="text-xs font-semibold text-clinical-700">{user.role}</p>
+                <p className="text-[11px] text-slate-500 mt-0.5">{user.organization || 'EvidenceBridge Clinical Review Network'}</p>
+              </div>
+            </div>
+
+            {/* Details Cards */}
+            <div className="space-y-2.5 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200 mb-5">
+              <div className="flex items-center justify-between py-1 border-b border-slate-200/70">
+                <span className="text-slate-500 font-medium">Email Address:</span>
+                <span className="font-semibold text-slate-800">{user.email}</span>
+              </div>
+              <div className="flex items-center justify-between py-1 border-b border-slate-200/70">
+                <span className="text-slate-500 font-medium">Reviewer ID:</span>
+                <span className="font-mono text-slate-700">{user.id}</span>
+              </div>
+              <div className="flex items-center justify-between py-1 border-b border-slate-200/70">
+                <span className="text-slate-500 font-medium">Account Access:</span>
+                <span className="font-semibold text-emerald-700">1-Click Demo Reviewer &bull; Full Access</span>
+              </div>
+              <div className="flex items-center justify-between py-1">
+                <span className="text-slate-500 font-medium">Assigned Territory:</span>
+                <span className="font-semibold text-slate-800">Karnataka &bull; All-India National Benchmarks</span>
+              </div>
+            </div>
+
+            {/* Modal Actions */}
+            <div className="flex items-center justify-between gap-3 pt-2">
+              <button
+                type="button"
+                onClick={() => setProfileModalOpen(false)}
+                className="flex-1 py-2.5 px-4 rounded-xl border border-slate-300 text-slate-700 hover:bg-slate-50 text-xs font-bold transition-colors"
+              >
+                Close Profile
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  setProfileModalOpen(false)
+                  handleSignOut()
+                }}
+                className="py-2.5 px-4 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold transition-colors shadow-xs"
+              >
+                Sign Out
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Floating AI Voice Assistant */}
       <VoiceAssistant />

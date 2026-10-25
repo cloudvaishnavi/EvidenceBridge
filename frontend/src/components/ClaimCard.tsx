@@ -2,6 +2,7 @@ import React from 'react'
 import { Link } from 'react-router-dom'
 import type { Claim, VerificationResult } from '../types'
 import { VerificationBadge, VerdictBadge } from './VerificationBadge'
+import { formatCurrency } from '../utils/currency'
 
 interface ClaimCardProps {
   claim: Claim
@@ -13,6 +14,19 @@ export function ClaimCard({ claim, verification }: ClaimCardProps) {
   const cost = claim.extracted_fields?.cost_range
   const outcome = claim.extracted_fields?.effect_or_outcome
   const location = claim.location
+
+  const displayCost = (() => {
+    if (!cost) return null
+    const hasSymbol = /[\$₹€£]/.test(cost) || /rs\.?/i.test(cost) || /usd|inr|eur|gbp/i.test(cost)
+    if (hasSymbol) {
+      return `${cost}${claim.extracted_fields?.cost_currency ? ` (${claim.extracted_fields.cost_currency})` : ''}`
+    }
+    const cleanNum = parseFloat(cost.replace(/,/g, ''))
+    if (!isNaN(cleanNum)) {
+      return formatCurrency(cleanNum, claim.extracted_fields?.cost_currency || 'INR')
+    }
+    return `${cost}${claim.extracted_fields?.cost_currency ? ` (${claim.extracted_fields.cost_currency})` : ''}`
+  })()
 
   return (
     <Link
@@ -74,12 +88,12 @@ export function ClaimCard({ claim, verification }: ClaimCardProps) {
       {/* Footer Metrics */}
       <div className="pt-3 border-t border-slate-100 flex flex-col sm:flex-row sm:items-center justify-between text-xs text-slate-500 gap-2">
         <div className="flex items-center gap-3 sm:gap-4 flex-wrap">
-          {cost ? (
+          {displayCost ? (
             <span className="font-bold text-slate-900 bg-slate-50 px-2.5 py-0.5 rounded-md border border-slate-200 font-mono text-xs">
-              Billed: {cost}
+              Billed: {displayCost}
             </span>
           ) : (
-            <span className="text-slate-400 italic">No billed amount</span>
+            <span className="text-slate-400 italic text-[11px]">Price data not available</span>
           )}
 
           {verification && (

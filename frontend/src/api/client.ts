@@ -26,10 +26,138 @@ import {
   VerificationResult,
 } from '../types'
 
-export const API_BASE = '/api/v1'
+
+export const API_BASE = (import.meta.env.VITE_API_BASE_URL || '/api/v1').replace(/\/+$/, '')
+
+export const TOKEN_STORAGE_KEY = 'evidencebridge_token'
+export const USER_STORAGE_KEY = 'evidencebridge_user'
+
+// In-memory token cache for synchronous, zero-race-condition access
+let memoryAuthToken: string | null = null
+let autoDemoPromise: Promise<string | null> | null = null
+
+// Initialize memory token synchronously on script load
+try {
+  if (typeof window !== 'undefined') {
+    memoryAuthToken =
+      localStorage.getItem(TOKEN_STORAGE_KEY) ||
+      sessionStorage.getItem(TOKEN_STORAGE_KEY) ||
+      null
+  }
+} catch {
+  // Storage access might be restricted in some iframe / sandboxed environments
+}
+
+export function getAuthToken(): string | null {
+  if (memoryAuthToken && memoryAuthToken.trim()) {
+    return memoryAuthToken.trim()
+  }
+  if (typeof window !== 'undefined') {
+    try {
+      const local = localStorage.getItem(TOKEN_STORAGE_KEY)
+      if (local && local.trim()) {
+        memoryAuthToken = local.trim()
+        return memoryAuthToken
+      }
+      const session = sessionStorage.getItem(TOKEN_STORAGE_KEY)
+      if (session && session.trim()) {
+        memoryAuthToken = session.trim()
+        return memoryAuthToken
+      }
+    } catch {
+      // Storage access might be restricted
+    }
+  }
+  return null
+}
+
+export function setAuthToken(token: string | null): void {
+  memoryAuthToken = token && token.trim() ? token.trim() : null
+  if (typeof window !== 'undefined') {
+    try {
+      if (memoryAuthToken) {
+        localStorage.setItem(TOKEN_STORAGE_KEY, memoryAuthToken)
+        sessionStorage.setItem(TOKEN_STORAGE_KEY, memoryAuthToken)
+      } else {
+        localStorage.removeItem(TOKEN_STORAGE_KEY)
+        sessionStorage.removeItem(TOKEN_STORAGE_KEY)
+      }
+    } catch {
+      // Storage access might be restricted
+    }
+  }
+}
+
+/**
+ * Ensures a valid session token exists before issuing protected requests.
+ * If user is unauthenticated, acquires a canonical Demo Auditor session
+ * to prevent 401 Unauthorized errors on first load.
+ */
+export async function ensureAuthToken(): Promise<string | null> {
+  const existing = getAuthToken()
+  if (existing) {
+    return existing
+  }
+
+  if (autoDemoPromise) {
+    return autoDemoPromise
+  }
+
+  autoDemoPromise = (async () => {
+    try {
+      const res = await fetch(`${API_BASE}/auth/demo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      if (res.ok) {
+        const data = await res.json()
+        if (data?.access_token) {
+          setAuthToken(data.access_token)
+          if (typeof window !== 'undefined' && data.user) {
+            try {
+              const u = {
+                id: data.user.user_id,
+                name: data.user.name,
+                email: data.user.email,
+                role: data.user.role,
+                organization: data.user.organization,
+              }
+              localStorage.setItem(USER_STORAGE_KEY, JSON.stringify(u))
+              sessionStorage.setItem(USER_STORAGE_KEY, JSON.stringify(u))
+            } catch {
+              // ignore
+            }
+          }
+          return data.access_token
+        }
+      }
+    } catch (err) {
+      console.warn('Auto demo authentication failed:', err)
+    } finally {
+      autoDemoPromise = null
+    }
+
+    // Ultimate offline fallback token recognizable by backend
+    setAuthToken('demo_bearer_token')
+    return 'demo_bearer_token'
+  })()
+
+  return autoDemoPromise
+}
 
 async function apiFetch<T>(path: string, init?: RequestInit): Promise<T> {
-  const token = typeof window !== 'undefined' ? localStorage.getItem('evidencebridge_token') : null
+  // Public endpoints do not require an Authorization header
+  const isPublic =
+    path.startsWith('/health') ||
+    path.startsWith('/auth/login') ||
+    path.startsWith('/auth/signup') ||
+    path.startsWith('/auth/demo')
+
+  let token = getAuthToken()
+  if (!token && !isPublic) {
+    token = await ensureAuthToken()
+  }
+
   const authHeaders: Record<string, string> = {}
   if (token) {
     authHeaders['Authorization'] = `Bearer ${token}`
@@ -202,9 +330,27 @@ export function createStory(
   })
 }
 
-export function getInsightsSummary(userId?: string): Promise<InsightsSummaryResponse> {
-  const qs = userId ? `?user_id=${encodeURIComponent(userId)}` : ''
-  return apiFetch<InsightsSummaryResponse>(`/insights/summary${qs}`)
+export function getInsightsSummary(
+  paramsOrUserId?: string | { userId?: string; benchmark?: boolean; allowFallback?: boolean },
+): Promise<InsightsSummaryResponse> {
+  let userId: string | undefined
+  let benchmark: boolean | undefined
+  let allowFallback: boolean | undefined
+
+  if (typeof paramsOrUserId === 'string') {
+    userId = paramsOrUserId
+  } else if (paramsOrUserId) {
+    userId = paramsOrUserId.userId
+    benchmark = paramsOrUserId.benchmark
+    allowFallback = paramsOrUserId.allowFallback
+  }
+
+  const qs = new URLSearchParams()
+  if (userId) qs.set('user_id', userId)
+  if (benchmark !== undefined) qs.set('benchmark', String(benchmark))
+  if (allowFallback !== undefined) qs.set('allow_fallback', String(allowFallback))
+  const q = qs.toString()
+  return apiFetch<InsightsSummaryResponse>(`/insights/summary${q ? `?${q}` : ''}`)
 }
 
 // ---- Authentication & User Accounts (Part 2) ----

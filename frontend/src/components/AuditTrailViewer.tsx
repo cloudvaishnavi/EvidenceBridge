@@ -1,6 +1,7 @@
 import React, { useState } from 'react'
 import type { AuditTrail, DecisionStep, EvidencePassage } from '../types'
 import { VerificationBadge, VerdictBadge } from './VerificationBadge'
+import { formatCurrency } from '../utils/currency'
 
 interface AuditTrailViewerProps {
   auditTrail: AuditTrail
@@ -288,34 +289,39 @@ export function AuditTrailViewer({ auditTrail }: AuditTrailViewerProps) {
                             <div className="bg-white p-2 rounded border border-rose-100">
                               <span className="text-slate-400 block text-[10px]">Billed Charge:</span>
                               <span className="font-semibold text-slate-900">
-                                ${Number(step.details.extracted_amount || 0).toLocaleString()}
+                                {step.details.extracted_amount != null
+                                  ? formatCurrency(Number(step.details.extracted_amount), String(step.details.currency || 'INR'))
+                                  : 'Price data not available'}
                               </span>
                             </div>
                             <div className="bg-white p-2 rounded border border-rose-100">
-                              <span className="text-slate-400 block text-[10px]">Markup Multiplier:</span>
-                              <span
-                                className={`font-bold ${
-                                  Number(step.details.multiplier || 0) >= 3
-                                    ? 'text-rose-600'
-                                    : 'text-slate-800'
-                                }`}
-                              >
-                                {step.details.multiplier
-                                  ? `${Number(step.details.multiplier).toFixed(1)}× benchmark`
-                                  : '1.0×'}
+                              <span className="text-slate-400 block text-[10px]">Benchmark Range:</span>
+                              <span className="font-semibold text-slate-800">
+                                {step.details.benchmark_max != null
+                                  ? `${formatCurrency(Number(step.details.benchmark_min || 0), String(step.details.benchmark_currency || step.details.currency || 'INR'))} – ${formatCurrency(Number(step.details.benchmark_max), String(step.details.benchmark_currency || step.details.currency || 'INR'))}`
+                                  : 'Benchmark not available'}
                               </span>
                             </div>
                             <div className="bg-white p-2 rounded border border-rose-100">
-                              <span className="text-slate-400 block text-[10px]">Anomaly Status:</span>
+                              <span className="text-slate-400 block text-[10px]">Markup Status:</span>
                               <span
                                 className={`font-bold ${
-                                  step.details.is_anomaly ? 'text-rose-600' : 'text-emerald-600'
+                                  step.details.is_anomaly ? 'text-rose-600' : 'text-slate-800'
                                 }`}
                               >
-                                {step.details.is_anomaly ? 'FLAGGED ANOMALY' : 'NORMAL PRICING'}
+                                {step.details.is_anomaly
+                                  ? `${Number(step.details.multiplier || 1).toFixed(1)}× (ANOMALY)`
+                                  : (step.details.multiplier
+                                      ? `${Number(step.details.multiplier).toFixed(1)}× (NORMAL)`
+                                      : 'NORMAL PRICING')}
                               </span>
                             </div>
                           </div>
+                          {Boolean(step.details.benchmark_currency && step.details.currency && step.details.benchmark_currency !== step.details.currency) && (
+                            <div className="mt-2 text-[11px] text-amber-800 bg-amber-50 p-2 rounded border border-amber-200">
+                              ⚠️ Note: Billed charge is in {String(step.details.currency)} while comparison benchmark is published in {String(step.details.benchmark_currency)}. Cross-currency comparison is noted.
+                            </div>
+                          )}
                         </div>
                       )}
 

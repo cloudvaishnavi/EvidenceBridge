@@ -6,8 +6,16 @@ Verifies aggregated decision metrics, price alert distributions, and guideline s
 import pytest
 from fastapi.testclient import TestClient
 from app.main import app
+from app.services.auth import (
+    create_access_token,
+    DEMO_USER_ID,
+    DEMO_USER_EMAIL,
+    DEMO_USER_NAME,
+)
 
 client = TestClient(app)
+demo_token = create_access_token(DEMO_USER_ID, DEMO_USER_EMAIL, DEMO_USER_NAME)
+client.headers["Authorization"] = f"Bearer {demo_token}"
 
 
 def test_get_insights_summary():

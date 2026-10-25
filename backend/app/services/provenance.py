@@ -100,6 +100,23 @@ class ProvenanceService:
                 location_field=extracted_fields.location_city,
             )
 
+        # Detect and set explicit cost_currency if cost is present
+        if extracted_fields.cost_range and not extracted_fields.cost_currency:
+            loc_str = ""
+            if resolved_location and resolved_location.city:
+                loc_str = f"{resolved_location.city} {resolved_location.state_or_region or ''}"
+            elif extracted_fields.location_city:
+                loc_str = extracted_fields.location_city
+            try:
+                from app.services.cost_anomaly import cost_anomaly_service
+                extracted_fields.cost_currency = cost_anomaly_service.detect_currency(
+                    extracted_fields.cost_range,
+                    original_text,
+                    loc_str
+                )
+            except Exception:
+                extracted_fields.cost_currency = "USD"
+
         claim = Claim(
             claim_id=cid,
             original_text=original_text,

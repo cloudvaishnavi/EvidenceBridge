@@ -190,15 +190,27 @@ class AuditService:
         ))
 
         # Step 4: Cost Anomaly Audit
+        cost_curr = getattr(cost_details, "currency", "INR") or "INR"
+        curr_symbol = "₹" if cost_curr == "INR" else ("€" if cost_curr == "EUR" else ("£" if cost_curr == "GBP" else "$"))
+        bm_curr = getattr(cost_details, "benchmark_currency", cost_curr) or cost_curr
+        bm_symbol = "₹" if bm_curr == "INR" else ("€" if bm_curr == "EUR" else ("£" if bm_curr == "GBP" else "$"))
+
         if cost_details.extracted_amount is None:
             cost_out = "No numeric cost figure identified in claim for anomaly auditing."
         elif cost_details.benchmark_max is None:
-            cost_out = f"No public pricing benchmark matched for entity '{claim.extracted_fields.entity}'. Billed: ${cost_details.extracted_amount:,.2f}."
+            cost_out = f"No public pricing benchmark matched for entity '{claim.extracted_fields.entity}'. Billed: {curr_symbol}{cost_details.extracted_amount:,.2f} ({cost_curr})."
+        elif bm_curr != cost_curr:
+            bm_name = cost_details.benchmark_name or "matched benchmark"
+            cost_out = (
+                f"Benchmark='{bm_name}' ({bm_symbol}{cost_details.benchmark_min:,.2f} - {bm_symbol}{cost_details.benchmark_max:,.2f} {bm_curr}). "
+                f"Billed={curr_symbol}{cost_details.extracted_amount:,.2f} {cost_curr}. "
+                f"Cross-currency comparison noted: billed in {cost_curr}, benchmark in {bm_curr}."
+            )
         else:
             bm_name = cost_details.benchmark_name or "matched benchmark"
             cost_out = (
-                f"Benchmark='{bm_name}' (${cost_details.benchmark_min:,.2f} - ${cost_details.benchmark_max:,.2f}). "
-                f"Billed=${cost_details.extracted_amount:,.2f} ({cost_details.multiplier or 1.0:.1f}× max, "
+                f"Benchmark='{bm_name}' ({curr_symbol}{cost_details.benchmark_min:,.2f} - {curr_symbol}{cost_details.benchmark_max:,.2f} {cost_curr}). "
+                f"Billed={curr_symbol}{cost_details.extracted_amount:,.2f} ({cost_details.multiplier or 1.0:.1f}× max, "
                 f"Anomaly={cost_details.is_anomaly}, Severity={cost_details.severity.upper()})."
             )
 
@@ -208,6 +220,8 @@ class AuditService:
             output_summary=cost_out,
             details={
                 "is_anomaly": cost_details.is_anomaly,
+                "currency": cost_curr,
+                "benchmark_currency": bm_curr,
                 "extracted_amount": cost_details.extracted_amount,
                 "benchmark_matched": bool(getattr(cost_details, "benchmark_matched", False) or cost_details.benchmark_max is not None),
                 "benchmark_name": cost_details.benchmark_name or "no benchmark matched",

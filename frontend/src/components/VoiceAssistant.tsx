@@ -57,7 +57,7 @@ export function VoiceAssistant() {
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-slate-900 text-white text-xs font-bold shadow-elevated border border-slate-700 animate-in fade-in"
             >
               <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse" />
-              <span>Speaking &bull; Click to Stop</span>
+              <span>{language === 'kn' ? 'ಧ್ವನಿ ನಿಲ್ಲಿಸಿ • Stop' : 'Speaking • Click to Stop'}</span>
             </button>
           )}
 
@@ -66,17 +66,17 @@ export function VoiceAssistant() {
               type="button"
               onClick={stopListening}
               className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-rose-600 text-white text-xs font-bold shadow-elevated animate-pulse hover:bg-rose-700"
-              title="Click to pause listening"
+              title={language === 'kn' ? 'ಆಲಿಸುವುದನ್ನು ನಿಲ್ಲಿಸಲು ಒತ್ತಿ' : 'Click to pause listening'}
             >
               <span className="w-2 h-2 rounded-full bg-white" />
-              <span>Listening (Active) &bull; Pause</span>
+              <span>{language === 'kn' ? 'ಆಲಿಸಲಾಗುತ್ತಿದೆ • Pause' : 'Listening (Active) • Pause'}</span>
             </button>
           )}
 
           {status === 'idle' && isContinuous && (
             <div className="hidden sm:flex items-center gap-1.5 px-3 py-1.5 rounded-full bg-emerald-800 text-white text-xs font-semibold shadow-sm">
               <span className="w-2 h-2 rounded-full bg-emerald-400" />
-              <span>Voice Ready</span>
+              <span>{language === 'kn' ? 'ಧ್ವನಿ ಸಿದ್ಧವಾಗಿದೆ' : 'Voice Ready'}</span>
             </div>
           )}
 
@@ -177,21 +177,21 @@ export function VoiceAssistant() {
               className={`px-3.5 py-2 text-xs border-b flex flex-col gap-0.5 ${
                 kannadaVoiceAvailable
                   ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
-                  : 'bg-amber-50 text-amber-900 border-amber-200'
+                  : 'bg-amber-50 text-amber-950 border-amber-200'
               }`}
             >
               <div className="flex items-center gap-1.5 font-bold">
                 <span>{kannadaVoiceAvailable ? '🔊' : 'ℹ️'}</span>
                 <span>
                   {kannadaVoiceAvailable
-                    ? 'ಕನ್ನಡ ಧ್ವನಿ ಸಕ್ರಿಯವಾಗಿದೆ (ಬ್ರೌಸರ್ ಎಂಜಿನ್)'
-                    : 'ಕನ್ನಡ ಸ್ಪೀಚ್ ಸಿಂಥೆಸಿಸ್ (ಆಡಿಯೋ ಫಾಲ್‌ಬ್ಯಾಕ್ ಸಕ್ರಿಯ)'}
+                    ? 'ಕನ್ನಡ ಧ್ವನಿ ಸಕ್ರಿಯವಾಗಿದೆ (Kannada Voice Active)'
+                    : 'Kannada voice is not available on this device. Showing text instead.'}
                 </span>
               </div>
               <p className="text-[11px] leading-tight opacity-90">
                 {kannadaVoiceAvailable
-                  ? 'ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡಿ ಪ್ರಶ್ನೆ ಕೇಳಬಹುದು ಅಥವಾ ಫಲಿತಾಂಶಗಳನ್ನು ಆಲಿಸಬಹುದು.'
-                  : 'ಆಡಿಯೋ ಕೇಳಲು "Repeat" (🔊) ಕ್ಲಿಕ್ ಮಾಡಿ. ಫಲಿತಾಂಶ ಪಠ್ಯ ರೂಪದಲ್ಲೂ ಲಭ್ಯವಿದೆ.'}
+                  ? 'ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡಿ ಪ್ರಶ್ನೆ ಕೇಳಬಹುದು ಅಥವಾ ಮಾತನಾಡುವ ಉತ್ತರಗಳನ್ನು ಆಲಿಸಬಹುದು.'
+                  : 'ಈ ಸಾಧನದಲ್ಲಿ ಕನ್ನಡ ಧ್ವನಿ ಲಭ್ಯವಿಲ್ಲ. ಪ್ರಶ್ನೆಗಳ ಉತ್ತರಗಳನ್ನು ಕೆಳಗೆ ಪಠ್ಯ ರೂಪದಲ್ಲಿ ನೀಡಲಾಗುತ್ತದೆ.'}
               </p>
             </div>
           )}
@@ -263,14 +263,16 @@ export function VoiceAssistant() {
                       : 'Listening (Active)...'
                     : status === 'speaking'
                     ? language === 'kn'
-                      ? 'ಮಾತನಾಡಲಾಗುತ್ತಿದೆ...'
+                      ? 'ಕನ್ನಡದಲ್ಲಿ ಮಾತನಾಡಲಾಗುತ್ತಿದೆ (Speaking Kannada)...'
                       : 'Speaking answer...'
                     : status === 'thinking'
                     ? language === 'kn'
                       ? 'ವಿಶ್ಲೇಷಿಸಲಾಗುತ್ತಿದೆ...'
                       : 'Analyzing with local AI...'
                     : language === 'kn'
-                    ? 'ಸಿದ್ಧವಾಗಿದೆ (Ready)'
+                    ? kannadaVoiceAvailable
+                      ? 'ಸಿದ್ಧವಾಗಿದೆ (Ready)'
+                      : 'ಪಠ್ಯ ಮೋಡ್ ಸಿದ್ಧವಾಗಿದೆ (Text Mode Ready)'
                     : 'Ready to listen'}
                 </span>
               </div>
@@ -296,7 +298,7 @@ export function VoiceAssistant() {
                     onClick={stopSpeaking}
                     className="px-3 py-1 rounded-lg bg-rose-600 hover:bg-rose-700 text-white text-[11px] font-bold transition-colors"
                   >
-                    ⏹ Stop Speaking
+                    {language === 'kn' ? '⏹ ಧ್ವನಿ ನಿಲ್ಲಿಸಿ (Stop)' : '⏹ Stop Speaking'}
                   </button>
                 )}
                 {status === 'listening' && (
@@ -305,30 +307,55 @@ export function VoiceAssistant() {
                     onClick={stopListening}
                     className="px-3 py-1 rounded-lg bg-slate-800 hover:bg-slate-900 text-white text-[11px] font-bold transition-colors"
                   >
-                    ⏸ Pause Listening
+                    {language === 'kn' ? '⏸ ಆಲಿಸುವುದು ವಿರಾಮ (Pause)' : '⏸ Pause Listening'}
                   </button>
                 )}
               </div>
             </div>
 
-            {/* Error Message */}
+            {/* Error / Fallback Notice */}
             {error && (
-              <div className="p-2.5 rounded-xl bg-rose-50 border border-rose-200 text-rose-800 text-xs">
-                <strong>Notice:</strong> {error}
+              <div
+                className={`p-2.5 rounded-xl text-xs border ${
+                  error.includes('Kannada voice is not available')
+                    ? 'bg-amber-50 border-amber-200 text-amber-950 font-medium'
+                    : 'bg-rose-50 border-rose-200 text-rose-800'
+                }`}
+              >
+                <div className="flex items-center gap-1.5 font-bold mb-0.5">
+                  <span>{error.includes('Kannada voice is not available') ? 'ℹ️' : '⚠️'}</span>
+                  <span>{error.includes('Kannada voice is not available') ? 'Device Audio Notice' : 'Notice'}</span>
+                </div>
+                <div>{error}</div>
               </div>
             )}
 
-            {/* Latest Assistant Spoken Text Card */}
+            {/* Latest Assistant Spoken/Displayed Text Card */}
             {lastSpoken && status !== 'listening' && (
               <div className="p-3 rounded-xl bg-slate-900 text-white text-xs space-y-1.5">
                 <div className="flex items-center justify-between text-[10px] text-slate-400 uppercase font-bold tracking-wider">
-                  <span>Assistant Answer</span>
+                  <span className="flex items-center gap-1.5">
+                    <span>{language === 'kn' ? 'ಸಹಾಯಕ ಉತ್ತರ (Answer)' : 'Assistant Answer'}</span>
+                    {language === 'kn' && !kannadaVoiceAvailable && (
+                      <span className="px-1.5 py-0.5 rounded text-[9px] bg-slate-800 text-amber-300 font-semibold border border-slate-700">
+                        Text Only
+                      </span>
+                    )}
+                  </span>
                   <button
                     type="button"
                     onClick={() => speak(lastSpoken)}
-                    className="text-sky-400 hover:text-sky-300 font-bold"
+                    className="text-sky-400 hover:text-sky-300 font-bold flex items-center gap-1"
+                    title={
+                      language === 'kn' && !kannadaVoiceAvailable
+                        ? 'Kannada voice is not available on this device'
+                        : language === 'kn'
+                        ? 'ಮತ್ತೆ ಹೇಳಿ (Repeat)'
+                        : 'Repeat answer'
+                    }
                   >
-                    🔊 Repeat
+                    <span>🔊</span>
+                    <span>{language === 'kn' ? 'ಮತ್ತೆ ಹೇಳಿ (Repeat)' : 'Repeat'}</span>
                   </button>
                 </div>
                 <p className="text-slate-100 leading-relaxed text-xs">{lastSpoken}</p>
@@ -345,6 +372,11 @@ export function VoiceAssistant() {
                   type="button"
                   onClick={() => {
                     navigate('/hospitals')
+                    const navMsg =
+                      language === 'kn'
+                        ? 'ಹತ್ತಿರದ ಆಸ್ಪತ್ರೆಗಳು ಮತ್ತು ವೆಚ್ಚ ಹುಡುಕುವ ಪುಟಕ್ಕೆ ಹೋಗುತ್ತಿದ್ದೇವೆ.'
+                        : 'Opening Hospital Finder.'
+                    speak(navMsg)
                     setIsOpen(false)
                   }}
                   className="p-2 rounded-lg bg-emerald-50 hover:bg-emerald-100 text-emerald-900 border border-emerald-200 text-xs font-semibold text-left transition-colors flex items-center gap-1.5"
@@ -435,17 +467,35 @@ export function VoiceAssistant() {
 
           {/* Footer Controls */}
           <div className="p-3 bg-slate-50 border-t border-slate-200 flex items-center justify-between gap-2">
-            <button
-              type="button"
-              onClick={toggleListen}
-              className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-1.5 ${
-                status === 'listening'
-                  ? 'bg-rose-600 hover:bg-rose-700 text-white animate-pulse'
-                  : 'bg-sky-600 hover:bg-sky-700 text-white'
-              }`}
-            >
-              <span>{status === 'listening' ? '⏹ Stop Listening' : '🎙️ Tap to Speak'}</span>
-            </button>
+            {status === 'speaking' ? (
+              <button
+                type="button"
+                onClick={stopSpeaking}
+                className="flex-1 py-2 px-3 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-1.5 bg-rose-600 hover:bg-rose-700 text-white"
+              >
+                <span>{language === 'kn' ? '⏹ ಧ್ವನಿ ನಿಲ್ಲಿಸಿ (Stop)' : '⏹ Stop Speaking'}</span>
+              </button>
+            ) : (
+              <button
+                type="button"
+                onClick={toggleListen}
+                className={`flex-1 py-2 px-3 rounded-xl text-xs font-bold shadow-sm transition-all flex items-center justify-center gap-1.5 ${
+                  status === 'listening'
+                    ? 'bg-rose-600 hover:bg-rose-700 text-white animate-pulse'
+                    : 'bg-sky-600 hover:bg-sky-700 text-white'
+                }`}
+              >
+                <span>
+                  {status === 'listening'
+                    ? language === 'kn'
+                      ? '⏹ ಆಲಿಸುವುದು ನಿಲ್ಲಿಸಿ'
+                      : '⏹ Stop Listening'
+                    : language === 'kn'
+                    ? '🎙️ ಮಾತನಾಡಲು ಒತ್ತಿ'
+                    : '🎙️ Tap to Speak'}
+                </span>
+              </button>
+            )}
 
             <button
               type="button"
@@ -454,9 +504,9 @@ export function VoiceAssistant() {
                 setIsEnabled(false)
               }}
               className="px-2.5 py-2 rounded-xl text-[10px] text-slate-400 hover:text-rose-600 font-medium"
-              title="Disable voice assistant"
+              title={language === 'kn' ? 'ಧ್ವನಿ ಸಹಾಯಕವನ್ನು ನಿಷ್ಕ್ರಿಯಗೊಳಿಸಿ' : 'Disable voice assistant'}
             >
-              Disable
+              {language === 'kn' ? 'ನಿಷ್ಕ್ರಿಯಗೊಳಿಸಿ' : 'Disable'}
             </button>
           </div>
         </div>

@@ -1,4 +1,6 @@
 import React, { useState, useEffect, useCallback } from 'react'
+import { formatCurrency } from '../utils/currency'
+import { API_BASE } from '../api/client'
 
 export interface HospitalProcedurePrice {
   service_name: string
@@ -70,7 +72,7 @@ export interface HospitalSearchResponse {
 }
 
 export function HospitalFinder() {
-  const [cityOrArea, setCityOrArea] = useState('Atlanta, GA')
+  const [cityOrArea, setCityOrArea] = useState('Bengaluru, Karnataka')
   const [symptom, setSymptom] = useState('')
   const [maxDistanceKm, setMaxDistanceKm] = useState(35)
   const [careType, setCareType] = useState('All')
@@ -88,17 +90,20 @@ export function HospitalFinder() {
 
   // Fetch hospitals
   const executeSearch = useCallback(
-    async (overrideCoords?: { lat: number; lon: number }) => {
+    async (overrideCoords?: { lat: number; lon: number }, overrideCity?: string) => {
       setLoading(true)
       setSearchError(null)
 
       try {
+        const queryCity = overrideCity !== undefined ? overrideCity : cityOrArea
         const params = new URLSearchParams()
-        if (cityOrArea.trim()) {
-          params.append('city_or_area', cityOrArea.trim())
+        if (queryCity.trim()) {
+          params.append('city_or_area', queryCity.trim())
         }
 
-        const activeCoords = overrideCoords || coords
+        // Only append coordinates if GPS override is explicitly supplied
+        // or if coords are set and the user is searching with 'Your Current Geolocation'
+        const activeCoords = overrideCoords || (queryCity === 'Your Current Geolocation' ? coords : null)
         if (activeCoords) {
           params.append('lat', activeCoords.lat.toString())
           params.append('lon', activeCoords.lon.toString())
@@ -114,7 +119,7 @@ export function HospitalFinder() {
         }
         params.append('sort_by', sortBy)
 
-        const res = await fetch(`/api/hospitals/search?${params.toString()}`)
+        const res = await fetch(`${API_BASE}/hospitals/search?${params.toString()}`)
         if (!res.ok) {
           throw new Error(`Search failed with status ${res.status}`)
         }
@@ -182,20 +187,6 @@ export function HospitalFinder() {
       ...prev,
       [hospId]: !prev[hospId],
     }))
-  }
-
-  const formatCurrency = (val: number, currency = 'USD') => {
-    const cur = (currency || 'USD').toUpperCase()
-    if (cur === 'INR') {
-      return `₹${val.toLocaleString('en-IN')}`
-    }
-    if (cur === 'EUR') {
-      return `€${val.toLocaleString('de-DE', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    }
-    if (cur === 'GBP') {
-      return `£${val.toLocaleString('en-GB', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
-    }
-    return `$${val.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`
   }
 
   return (
@@ -291,8 +282,11 @@ export function HospitalFinder() {
               <input
                 type="text"
                 value={cityOrArea}
-                onChange={(e) => setCityOrArea(e.target.value)}
-                placeholder="e.g. Atlanta, Chicago, Bengaluru, Houston..."
+                onChange={(e) => {
+                  setCityOrArea(e.target.value)
+                  setCoords(null)
+                }}
+                placeholder="e.g. Bengaluru, Ballari, Chicago, Atlanta..."
                 className="w-full px-3.5 py-2.5 rounded-xl border border-slate-300 text-xs sm:text-sm font-medium focus:outline-none focus:ring-2 focus:ring-sky-500 focus:border-sky-500 pr-10"
               />
               <button
@@ -365,6 +359,42 @@ export function HospitalFinder() {
             </button>
           </div>
         </form>
+
+        {/* Quick Regional City Chips for Verified Outpatient Tariffs & Trust Scores */}
+        <div className="pt-2 border-t border-slate-100 flex flex-wrap items-center gap-1.5 text-xs">
+          <span className="text-[11px] font-bold text-slate-500 uppercase tracking-wider mr-1">
+            Verified Karnataka Hubs:
+          </span>
+          {[
+            { label: 'Bengaluru', query: 'Bengaluru, Karnataka' },
+            { label: 'Ballari', query: 'Ballari, Karnataka' },
+            { label: 'Davangere', query: 'Davangere, Karnataka' },
+            { label: 'Hubli / Dharwad', query: 'Hubballi-Dharwad, Karnataka' },
+            { label: 'Mysuru', query: 'Mysuru, Karnataka' },
+            { label: 'Mangaluru', query: 'Mangaluru, Karnataka' },
+            { label: 'Belagavi', query: 'Belagavi, Karnataka' },
+          ].map((c) => {
+            const isSelected = cityOrArea.toLowerCase().includes(c.label.toLowerCase().split(' ')[0])
+            return (
+              <button
+                key={c.label}
+                type="button"
+                onClick={() => {
+                  setCityOrArea(c.query)
+                  setCoords(null)
+                  executeSearch(undefined, c.query)
+                }}
+                className={`px-2.5 py-1 rounded-lg text-[11px] font-bold transition-all ${
+                  isSelected
+                    ? 'bg-sky-600 text-white shadow-xs'
+                    : 'bg-slate-100 hover:bg-sky-50 text-slate-700 hover:text-sky-800 border border-slate-200'
+                }`}
+              >
+                📍 {c.label}
+              </button>
+            )
+          })}
+        </div>
 
         {/* Secondary Filters: Distance Slider & Sort Bar */}
         <div className="pt-3 border-t border-slate-100 flex flex-wrap items-center justify-between gap-4 text-xs">
@@ -532,9 +562,17 @@ export function HospitalFinder() {
                   {/* Top Header: Name, Distance & Facility Type */}
                   <div className="flex items-start justify-between gap-3 mb-2">
                     <div>
-                      <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wide bg-slate-100 text-slate-700 mb-1">
-                        {hosp.facility_type}
-                      </span>
+                      <div className="flex flex-wrap items-center gap-1.5 mb-1.5">
+                        <span className="inline-block px-2.5 py-0.5 rounded-md text-[10px] font-extrabold uppercase tracking-wide bg-slate-100 text-slate-700">
+                          {hosp.facility_type}
+                        </span>
+                        <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-bold bg-sky-50 text-sky-800 border border-sky-200">
+                          {hosp.country === 'IN' ? '🇮🇳 India' : hosp.country === 'US' ? '🇺🇸 USA' : hosp.country}
+                        </span>
+                        <span className="inline-block px-2 py-0.5 rounded-md text-[10px] font-medium bg-slate-50 text-slate-600 border border-slate-200">
+                          Source: {hosp.data_source}
+                        </span>
+                      </div>
                       <h3 className="text-base font-extrabold text-slate-900 leading-snug">
                         {hosp.name}
                       </h3>
@@ -582,9 +620,9 @@ export function HospitalFinder() {
                             </span>
                           </div>
                         ) : (
-                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-600 mt-1">
+                          <div className="flex items-center gap-1.5 text-xs font-bold text-slate-500 mt-1 italic">
                             <span>ℹ️</span>
-                            <span>Price not available online</span>
+                            <span>Price data not available</span>
                           </div>
                         )}
                       </div>
@@ -743,12 +781,79 @@ export function HospitalFinder() {
           })}
         </div>
       ) : (
-        <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 space-y-2">
+        <div className="p-8 text-center bg-white rounded-2xl border border-slate-200 space-y-4">
           <span className="text-3xl block">🏥</span>
-          <h3 className="text-base font-bold text-slate-900">No Hospitals Found in Radius</h3>
-          <p className="text-xs text-slate-500 max-w-md mx-auto">
-            Try expanding your travel distance slider or searching for a different city or neighborhood name above.
-          </p>
+          <div>
+            <h3 className="text-base font-bold text-slate-900">
+              No Hospitals Found Within {maxDistanceKm} km
+            </h3>
+            <p className="text-xs text-slate-600 max-w-lg mx-auto leading-relaxed mt-1">
+              No registered medical facilities were found within {maxDistanceKm} km of{' '}
+              <strong>{searchResponse?.query_city || cityOrArea}</strong>.
+              EvidenceBridge strictly adheres to your travel radius and will never substitute hospitals from distant cities or foreign countries.
+            </p>
+          </div>
+
+          {/* Actionable Suggestions */}
+          <div className="flex flex-wrap items-center justify-center gap-2 pt-1">
+            {maxDistanceKm < 50 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMaxDistanceKm(50)
+                  setTimeout(() => executeSearch(), 10)
+                }}
+                className="px-3.5 py-2 rounded-xl bg-sky-50 hover:bg-sky-100 text-sky-700 border border-sky-200 text-xs font-bold transition-colors inline-flex items-center gap-1.5"
+              >
+                <span>Expand to 50 km</span>
+                <span>&rarr;</span>
+              </button>
+            )}
+            {maxDistanceKm < 75 && (
+              <button
+                type="button"
+                onClick={() => {
+                  setMaxDistanceKm(75)
+                  setTimeout(() => executeSearch(), 10)
+                }}
+                className="px-3.5 py-2 rounded-xl bg-sky-600 hover:bg-sky-700 text-white text-xs font-bold shadow-xs transition-colors inline-flex items-center gap-1.5"
+              >
+                <span>Expand to 75 km Maximum</span>
+                <span>&rarr;</span>
+              </button>
+            )}
+          </div>
+
+          {/* Regional Hub Search Shortcuts */}
+          <div className="pt-3 border-t border-slate-100 max-w-lg mx-auto">
+            <span className="text-[11px] font-semibold text-slate-500 block mb-2">
+              Or search in major nearby regional healthcare centers:
+            </span>
+            <div className="flex flex-wrap items-center justify-center gap-1.5">
+              {[
+                'Davangere, Karnataka',
+                'Bengaluru, Karnataka',
+                'Ballari, Karnataka',
+                'Hubli, Karnataka',
+                'Mysuru, Karnataka',
+                'Shivamogga, Karnataka',
+                'Mangaluru, Karnataka',
+              ].map((hub) => (
+                <button
+                  key={hub}
+                  type="button"
+                  onClick={() => {
+                    setCityOrArea(hub)
+                    setCoords(null)
+                    setTimeout(() => executeSearch(), 10)
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-slate-700 text-[11px] font-medium transition-colors border border-slate-200"
+                >
+                  {hub.split(',')[0]}
+                </button>
+              ))}
+            </div>
+          </div>
         </div>
       )}
 

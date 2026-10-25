@@ -97,10 +97,14 @@ export function TrustDensityPanel({
                 Composite metric combining clinical compliance (50%), pricing consistency (35%), and claim volume (15%)
               </span>
             </div>
-            <span className={`text-3xl font-black font-mono ${scoreColor.split(' ')[0]}`}>
-              {metrics.density_score.toFixed(3)}
-              <span className="text-xs font-normal text-slate-400 ml-1">/ 1.000</span>
-            </span>
+            <div className="text-right">
+              <span className={`text-3xl font-black font-mono ${scoreColor.split(' ')[0]}`}>
+                {densityPct}%
+              </span>
+              <span className="text-xs font-mono font-bold text-slate-400 ml-1.5 block">
+                Index: {metrics.density_score.toFixed(3)}
+              </span>
+            </div>
           </div>
 
           <div className="w-full bg-slate-100 h-3 rounded-full overflow-hidden mt-3">
