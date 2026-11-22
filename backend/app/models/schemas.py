@@ -1077,6 +1077,7 @@ class ClinicalGroup(BaseModel):
     encounter_type: Optional[GroupedField] = None
     length_of_stay: Optional[GroupedField] = None
     procedure: Optional[GroupedField] = None
+    procedure_code: Optional[GroupedField] = None
     diagnosis: Optional[GroupedField] = None
     clinical_indication: Optional[GroupedField] = None
     admission_date: Optional[GroupedField] = None
@@ -1115,6 +1116,7 @@ class GroupedMedicalInformation(BaseModel):
     clinical: ClinicalGroup = Field(default_factory=ClinicalGroup)
     billing: BillingGroup = Field(default_factory=BillingGroup)
     document_type: Optional[str] = None
+    document_title: Optional[str] = None
 
 
 class NERExtractionResult(BaseModel):
@@ -1257,6 +1259,7 @@ class BillingClassification(str, Enum):
     POSSIBLE_DUPLICATE = "POSSIBLE_DUPLICATE"
     POTENTIAL_OVERLAP_REQUIRES_REVIEW = "POTENTIAL_OVERLAP_REQUIRES_REVIEW"
     INSUFFICIENT_ITEMIZATION = "INSUFFICIENT_ITEMIZATION"
+    PARTIAL_BILLING_UNAVAILABLE = "PARTIAL_BILLING_UNAVAILABLE"
 
 
 class BillingLineItem(BaseModel):
@@ -1331,6 +1334,10 @@ class BillingReconciliationResult(BaseModel):
     itemized_sum: float = 0.0
     difference: Optional[float] = None
     patient_payable: Optional[float] = None
+    subtotal: Optional[float] = None
+    tax_or_gst: Optional[float] = None
+    amount_paid: Optional[float] = None
+    balance_due: Optional[float] = None
     currency: str = "INR"
     line_items: list[BillingLineItem] = Field(default_factory=list)
     duplicates: list[DuplicateLineItem] = Field(default_factory=list)

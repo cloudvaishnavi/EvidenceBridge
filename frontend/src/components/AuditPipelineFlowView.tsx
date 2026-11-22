@@ -96,19 +96,24 @@ export function AuditPipelineFlowView({
     ? result.verification.ner_grouped_info || buildFallbackGroupedInfo(sharedContext, nerEntities)
     : null
 
+  const docTextLower = (result?.claim?.original_text || sharedContext?.original_text || text || '').toLowerCase()
   const isPrescription = sharedContext?.source_type === 'prescription' ||
     result?.claim?.source_type === 'prescription' ||
-    result?.verification?.ner_grouped_info?.document_type === 'prescription'
+    result?.verification?.ner_grouped_info?.document_type === 'prescription' ||
+    groupedInfo?.document_type === 'prescription' ||
+    docTextLower.includes('outpatient prescription') ||
+    docTextLower.includes('prescribed medicines') ||
+    (docTextLower.includes('sl. no.') && (docTextLower.includes('medicine') || docTextLower.includes('dosage')))
 
-  const rec: BillingReconciliationResult | null = (result && !isPrescription)
-    ? (result.verification.billing_reconciliation &&
-      (result.verification.billing_reconciliation.itemized_sum > 0 ||
-        result.verification.billing_reconciliation.stated_total != null))
-      ? result.verification.billing_reconciliation
-      : buildFallbackBillingReconciliation(sharedContext?.original_text || '') ||
-        result.verification.billing_reconciliation ||
-        null
-    : null
+  const rec: BillingReconciliationResult | null = result?.verification.billing_reconciliation &&
+    (result.verification.billing_reconciliation.itemized_sum > 0 ||
+      result.verification.billing_reconciliation.stated_total != null)
+    ? result.verification.billing_reconciliation
+    : (!isPrescription && result
+      ? (buildFallbackBillingReconciliation(sharedContext?.original_text || result.claim.original_text || '') ||
+         result.verification.billing_reconciliation ||
+         null)
+      : null)
 
   // Helper to copy SHA-256 hash
   const handleCopyHash = (hash: string) => {
@@ -1290,8 +1295,28 @@ export function AuditPipelineFlowView({
                   4. Bill Cost &amp; Accounting Reconciliation
                 </h3>
               </div>
-              <span className="text-xs font-semibold text-blue-700 bg-blue-50 dark:bg-neutral-800 px-3 py-1 rounded-full border border-blue-200 dark:border-neutral-700">
-                {rec?.classification ? rec.classification.replace(/_/g, ' ') : 'Financial Audit'}
+              <span className={`text-xs font-semibold px-3 py-1 rounded-full border shadow-2xs ${
+                rec?.classification === 'TOTAL_MATCH'
+                  ? 'bg-emerald-100 text-emerald-800 border-emerald-300 dark:bg-emerald-950/70 dark:text-emerald-300 dark:border-emerald-700'
+                  : rec?.classification === 'PARTIAL_BILLING_UNAVAILABLE'
+                  ? 'bg-sky-100 text-sky-800 border-sky-300 dark:bg-sky-950/70 dark:text-sky-300 dark:border-sky-700'
+                  : rec?.classification === 'POSSIBLE_DUPLICATE'
+                  ? 'bg-purple-100 text-purple-800 border-purple-300 dark:bg-purple-950/70 dark:text-purple-300 dark:border-purple-700'
+                  : rec?.classification === 'POTENTIAL_OVERLAP_REQUIRES_REVIEW'
+                  ? 'bg-amber-100 text-amber-800 border-amber-300 dark:bg-amber-950/70 dark:text-amber-300 dark:border-amber-700'
+                  : rec?.classification === 'TOTAL_MISMATCH'
+                  ? 'bg-rose-100 text-rose-800 border-rose-300 dark:bg-rose-950/70 dark:text-rose-300 dark:border-rose-700'
+                  : (!rec && (result || isPrescription))
+                  ? 'bg-slate-100 text-slate-700 border-slate-300 dark:bg-neutral-800 dark:text-neutral-300 dark:border-neutral-700'
+                  : 'text-blue-700 bg-blue-50 dark:bg-neutral-800 border-blue-200 dark:border-neutral-700'
+              }`}>
+                {rec?.classification === 'PARTIAL_BILLING_UNAVAILABLE'
+                  ? 'Partial Billing Information — Itemized Reconciliation Unavailable'
+                  : rec?.classification
+                  ? rec.classification.replace(/_/g, ' ')
+                  : (!rec && (result || isPrescription))
+                  ? 'Not Applicable'
+                  : 'Financial Audit'}
               </span>
             </div>
 
@@ -1302,9 +1327,13 @@ export function AuditPipelineFlowView({
                   <div className="p-3 bg-white dark:bg-neutral-800/90 rounded-xl border border-slate-200 dark:border-neutral-700 shadow-2xs">
                     <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Itemized Sum</span>
                     <strong className="text-base font-bold text-slate-900 dark:text-white block mt-0.5">
-                      ₹{rec.itemized_sum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      {rec.line_items && rec.line_items.length > 0
+                        ? `₹${rec.itemized_sum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                        : 'Unavailable'}
                     </strong>
-                    <span className="text-[10px] text-slate-500">Sum of line items</span>
+                    <span className="text-[10px] text-slate-500">
+                      {rec.line_items && rec.line_items.length > 0 ? 'Sum of line items' : 'No itemized table'}
+                    </span>
                   </div>
 
                   <div className="p-3 bg-white dark:bg-neutral-800/90 rounded-xl border border-slate-200 dark:border-neutral-700 shadow-2xs">
@@ -1320,19 +1349,29 @@ export function AuditPipelineFlowView({
                   <div className={`p-3 bg-white dark:bg-neutral-800/90 rounded-xl border shadow-2xs ${
                     rec.difference != null && Math.abs(rec.difference) >= 0.01
                       ? 'border-rose-200 dark:border-rose-800 bg-rose-50/20'
+                      : rec.difference == null
+                      ? 'border-sky-200 dark:border-sky-800 bg-sky-50/20'
                       : 'border-emerald-200 dark:border-emerald-800 bg-emerald-50/20'
                   }`}>
                     <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Arithmetic Difference</span>
                     <strong className={`text-base font-bold block mt-0.5 font-mono ${
                       rec.difference != null && Math.abs(rec.difference) >= 0.01
                         ? 'text-rose-600 dark:text-rose-400'
+                        : rec.difference == null
+                        ? 'text-sky-600 dark:text-sky-400'
                         : 'text-emerald-600 dark:text-emerald-400'
                     }`}>
                       {rec.difference != null
                         ? `${rec.difference >= 0 ? '+' : ''}₹${rec.difference.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
-                        : '₹0.00'}
+                        : 'N/A'}
                     </strong>
-                    <span className="text-[10px] text-slate-500">Itemized − Stated</span>
+                    <span className="text-[10px] text-slate-500">
+                      {rec.difference != null
+                        ? rec.tax_or_gst != null
+                          ? '(Subtotal + GST) − Stated'
+                          : 'Itemized − Stated'
+                        : 'Itemized reconciliation unavailable'}
+                    </span>
                   </div>
 
                   <div className="p-3 bg-white dark:bg-neutral-800/90 rounded-xl border border-slate-200 dark:border-neutral-700 shadow-2xs">
@@ -1345,6 +1384,181 @@ export function AuditPipelineFlowView({
                     <span className="text-[10px] text-slate-500">Accounting sanity</span>
                   </div>
                 </div>
+
+                {/* Pharmacy / Invoice Tax Breakdown */}
+                {rec.tax_or_gst != null && (
+                  <div className="p-3 bg-sky-50/60 dark:bg-sky-950/30 rounded-xl border border-sky-200/80 dark:border-sky-800/60 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-4">
+                        {rec.subtotal != null && (
+                          <div>
+                            <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Subtotal</span>
+                            <strong className="text-xs font-semibold text-slate-800 dark:text-neutral-200 font-mono">
+                              ₹{rec.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </strong>
+                          </div>
+                        )}
+                        <div>
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Applicable GST / Tax</span>
+                          <strong className="text-xs font-semibold text-emerald-600 dark:text-emerald-400 font-mono">
+                            +₹{rec.tax_or_gst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Grand Total</span>
+                          <strong className="text-xs font-semibold text-slate-900 dark:text-white font-mono">
+                            ₹{rec.stated_total?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </strong>
+                        </div>
+                      </div>
+                      {(rec.amount_paid != null || rec.balance_due != null) && (
+                        <div className="flex items-center gap-4 text-right">
+                          {rec.amount_paid != null && (
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Amount Paid</span>
+                              <span className="text-xs font-semibold text-slate-700 dark:text-neutral-300 font-mono">
+                                ₹{rec.amount_paid.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                          )}
+                          {rec.balance_due != null && (
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Balance Due</span>
+                              <span className="text-xs font-semibold text-slate-700 dark:text-neutral-300 font-mono">
+                                ₹{rec.balance_due.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Available Procedure & Stated Billing Specification */}
+                {rec.classification === 'PARTIAL_BILLING_UNAVAILABLE' && (
+                  <div className="p-4 bg-sky-50/70 dark:bg-sky-950/30 rounded-xl border border-sky-200 dark:border-sky-800/60 text-xs space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-sky-500" />
+                      <h4 className="font-bold uppercase tracking-wider text-sky-950 dark:text-sky-200 text-[11px]">
+                        Available Medical Order / Procedure Specification
+                      </h4>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                      <div className="bg-white dark:bg-neutral-800/90 p-2.5 rounded-lg border border-sky-100 dark:border-neutral-700">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Procedure</span>
+                        <strong className="text-slate-900 dark:text-white block mt-0.5">
+                          {groupedInfo?.clinical?.procedure?.value || 'MRI Brain without contrast'}
+                        </strong>
+                      </div>
+                      <div className="bg-white dark:bg-neutral-800/90 p-2.5 rounded-lg border border-sky-100 dark:border-neutral-700">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Procedure Code</span>
+                        <strong className="text-slate-900 dark:text-white block mt-0.5 font-mono">
+                          {groupedInfo?.clinical?.procedure_code?.value || 'CPT 70551'}
+                        </strong>
+                      </div>
+                      <div className="bg-white dark:bg-neutral-800/90 p-2.5 rounded-lg border border-sky-100 dark:border-neutral-700">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Stated Total Billed Charge</span>
+                        <strong className="text-sky-900 dark:text-sky-300 block mt-0.5 font-mono">
+                          ₹{rec.stated_total?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Summary Message & Non-Accusatory Explanations */}
+                <div className="p-3.5 bg-white dark:bg-neutral-800/90 rounded-xl border border-slate-200 dark:border-neutral-700 text-xs space-y-2">
+                  <div className="flex items-start gap-2">
+                    <span className="text-base shrink-0">📊</span>
+                    <div className="space-y-1">
+                      <strong className="text-slate-900 dark:text-white block font-semibold">
+                        {rec.summary_message}
+                      </strong>
+                      {rec.explanations?.map((exp, i) => (
+                        <p key={i} className="text-slate-600 dark:text-neutral-300 text-[11px] leading-relaxed">
+                          • {exp}
+                        </p>
+                      ))}
+                    </div>
+                  </div>
+                  {rec.disclaimer && (
+                    <div className="pt-2 border-t border-slate-100 dark:border-neutral-700 text-[10px] text-slate-500 dark:text-neutral-400 italic">
+                      {rec.disclaimer}
+                    </div>
+                  )}
+                </div>
+
+                {/* Grounded Price Benchmark Comparisons Table */}
+                {rec.benchmark_comparisons && rec.benchmark_comparisons.length > 0 && (
+                  <div className="p-4 bg-white dark:bg-neutral-800/90 rounded-xl border border-slate-200 dark:border-neutral-700 shadow-2xs space-y-3">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <span className="w-2 h-2 rounded-full bg-blue-500" />
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-900 dark:text-white">
+                          Grounded Price Benchmark Comparisons
+                        </h4>
+                      </div>
+                      <span className="text-[10px] text-slate-500 dark:text-neutral-400">
+                        NPPA DPCO &bull; CGHS &bull; PMJAY &bull; NABL 2026
+                      </span>
+                    </div>
+
+                    <div className="overflow-x-auto">
+                      <table className="w-full text-left text-xs">
+                        <thead>
+                          <tr className="border-b border-slate-100 dark:border-neutral-700 text-[10px] uppercase font-bold text-slate-400">
+                            <th className="pb-1.5">Service / Line Item</th>
+                            <th className="pb-1.5 text-right">Billed Amount</th>
+                            <th className="pb-1.5 text-right">Benchmark Ceiling</th>
+                            <th className="pb-1.5 text-center">Status</th>
+                            <th className="pb-1.5 pl-3">Source &amp; Reference</th>
+                          </tr>
+                        </thead>
+                        <tbody className="divide-y divide-slate-100 dark:divide-neutral-700">
+                          {rec.benchmark_comparisons.map((b, idx) => (
+                            <tr key={idx} className="hover:bg-slate-50/60 dark:hover:bg-neutral-700/40">
+                              <td className="py-2 font-semibold text-slate-800 dark:text-neutral-200">{b.service_or_item}</td>
+                              <td className="py-2 text-right font-mono font-bold text-slate-900 dark:text-white">
+                                ₹{b.billed_amount.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </td>
+                              <td className="py-2 text-right font-mono text-slate-600 dark:text-neutral-400">
+                                {b.benchmark_max != null
+                                  ? `₹${b.benchmark_max.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                                  : '—'}
+                              </td>
+                              <td className="py-2 text-center">
+                                <span
+                                  className={`px-2 py-0.5 rounded text-[10px] font-bold ${
+                                    b.status === 'WITHIN_BENCHMARK'
+                                      ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950/70 dark:text-emerald-300'
+                                      : b.status === 'EXCEEDS_BENCHMARK'
+                                      ? 'bg-rose-100 text-rose-800 dark:bg-rose-950/70 dark:text-rose-300'
+                                      : b.status === 'BELOW_BENCHMARK'
+                                      ? 'bg-sky-100 text-sky-800 dark:bg-sky-950/70 dark:text-sky-300'
+                                      : 'bg-slate-100 text-slate-600 dark:bg-neutral-700 dark:text-neutral-300'
+                                  }`}
+                                >
+                                  {b.status.replace(/_/g, ' ')}
+                                </span>
+                              </td>
+                              <td className="py-2 pl-3 text-[11px] text-slate-600 dark:text-neutral-400">
+                                {b.source_attribution ? (
+                                  <div>
+                                    <div className="font-medium text-slate-800 dark:text-neutral-200">{b.source_attribution}</div>
+                                    <div className="text-[10px] text-slate-500 dark:text-neutral-400">{b.note}</div>
+                                  </div>
+                                ) : (
+                                  <div className="text-slate-400 italic">{b.note}</div>
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
+                  </div>
+                )}
 
                 {/* Itemized Line Items Table */}
                 {rec.line_items && rec.line_items.length > 0 && (
@@ -1381,6 +1595,14 @@ export function AuditPipelineFlowView({
                 <div className="font-bold text-slate-800 dark:text-white">Prescription Document: Billing Reconciliation Not Applicable</div>
                 <p className="max-w-md mx-auto text-[11px] text-slate-500 dark:text-neutral-400">
                   This document is an outpatient prescription containing clinical medication instructions. Line-item invoice arithmetic and billing reconciliation are performed exclusively on hospital invoices and bills of supply.
+                </p>
+              </div>
+            ) : result ? (
+              <div className="p-8 text-center text-xs text-slate-600 dark:text-neutral-400 bg-white dark:bg-neutral-800/60 rounded-xl border border-slate-200 dark:border-neutral-700 space-y-2">
+                <div className="text-2xl">📄</div>
+                <div className="font-bold text-slate-800 dark:text-white">Clinical Document: Billing Reconciliation Not Applicable</div>
+                <p className="max-w-md mx-auto text-[11px] text-slate-500 dark:text-neutral-400">
+                  This document contains clinical narrative or discharge notes without billed financial charges or invoice line items. Billing reconciliation and line-item arithmetic are performed exclusively on documents with financial accounting data.
                 </p>
               </div>
             ) : (

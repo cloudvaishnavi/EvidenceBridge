@@ -478,6 +478,13 @@ class VerificationService:
         try:
             from app.services.ner import ner_service
             ner_grouped_info = ner_service.group_medical_information(claim.original_text, ner_entities or [])
+            if ner_grouped_info and ner_grouped_info.document_type == "prescription":
+                from app.services.billing_reconciliation import billing_reconciliation_service
+                if not billing_reconciliation_service.is_likely_bill(claim.original_text):
+                    if getattr(claim, "source_type", None) in ("hospital_bill", "clinical_note", "unknown", "other", ""):
+                        claim.source_type = "prescription"
+                    if shared_context and getattr(shared_context, "source_type", None) in ("hospital_bill", "clinical_note", "unknown", "other", ""):
+                        shared_context.source_type = "prescription"
         except Exception as e:
             logger.debug(f"Failed to generate grouped medical information: {e}")
 
@@ -725,8 +732,8 @@ class VerificationService:
             from app.services.billing_reconciliation import billing_reconciliation_service
             from app.models.schemas import BillingClassification
             source_t = getattr(claim, "source_type", "")
-            # Only perform billing reconciliation when document is genuinely classified/routed as a medical bill
-            if source_t == "hospital_bill" or (source_t != "prescription" and billing_reconciliation_service.is_likely_bill(claim.original_text)):
+            # Only perform billing reconciliation when document is genuinely classified/routed as a medical bill or contains likely bill evidence
+            if source_t == "hospital_bill" or billing_reconciliation_service.is_likely_bill(claim.original_text):
                 billing_rec_res = billing_reconciliation_service.reconcile_claim_billing(
                     claim=claim,
                     text=claim.original_text

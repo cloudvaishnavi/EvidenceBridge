@@ -865,10 +865,12 @@ async def extract_and_verify(
         from app.services.ner import ner_service
         ner_res = ner_service.extract_entities(raw_text)
         ner_entities = ner_res.entities
-        if ner_res and ner_res.document_type_detected == "prescription" and claim.source_type in ("hospital_bill", "clinical_note", "unknown", ""):
-            claim.source_type = "prescription"
-            if claim.provenance:
-                claim.provenance.source_type = "prescription"
+        if ner_res and ner_res.document_type_detected == "prescription" and claim.source_type in ("hospital_bill", "clinical_note", "unknown", "other", ""):
+            from app.services.billing_reconciliation import billing_reconciliation_service
+            if not billing_reconciliation_service.is_likely_bill(raw_text):
+                claim.source_type = "prescription"
+                if claim.provenance:
+                    claim.provenance.source_type = "prescription"
     except Exception as ner_err:
         logger.debug(f"BioBERT NER extraction skipped: {ner_err}")
 

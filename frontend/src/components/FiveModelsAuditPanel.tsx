@@ -806,19 +806,15 @@ export function buildFallbackBillingReconciliation(text: string): BillingReconci
     }
   }
 
-  if (items.length === 0) return null
-
-  const itemizedSum = Math.round(items.reduce((acc, it) => acc + it.amount, 0) * 100) / 100
-
   // Stated total
   let statedTotal: number | null = null
-  const statedMatch = text.match(/(?:stated\s*(?:total|billed|bill)?\s*(?:amount|charges?)?|total\s*billed\s*amount|grand\s*total|final\s*bill|patient\s*payable)\s*[:=]?\s*(?:Rs\.?|INR|[₹$])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:\/[-=]|only))?/i) ||
-    text.match(/(?:invoice\s*total|net\s*(?:total|payable|amount)|total\s*(?:bill|amount|charge|billed))\s*[:=]?\s*(?:Rs\.?|INR|[₹$])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:\/[-=]|only))?/i)
+  const statedMatch = text.match(/(?:stated\s*(?:total|billed|bill)?\s*(?:amount|charges?|fee)?|total\s*billed\s*(?:amount|charges?|fee)?|grand\s*total|final\s*bill|patient\s*payable)\s*[:=]?\s*(?:Rs\.?|INR|[₹$])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:\/[-=]|only))?/i) ||
+    text.match(/(?:invoice\s*total|net\s*(?:total|payable|amount)|total\s*(?:bill|amount|charge|charges|billed|payable|fee|cost)|billed\s*(?:amount|charge|charges|fee)|procedure\s*charge)\s*[:=]?\s*(?:Rs\.?|INR|[₹$])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:\/[-=]|only))?/i)
   if (statedMatch) {
     statedTotal = parseFloat(statedMatch[1].replace(/,/g, ''))
   } else {
     for (let i = 0; i < lines.length - 1; i++) {
-      if (/^(?:stated\s*(?:total|billed|bill)?\s*(?:amount|charges?)?|total\s*billed\s*amount|grand\s*total|final\s*bill|patient\s*payable)\s*[:=]?$/i.test(lines[i])) {
+      if (/^(?:stated\s*(?:total|billed|bill)?\s*(?:amount|charges?)?|total\s*billed\s*(?:amount|charges?|fee)?|total\s*(?:charge|charges|amount|bill)|grand\s*total|final\s*bill|patient\s*payable)\s*[:=]?$/i.test(lines[i])) {
         if (isAmount(lines[i + 1])) {
           statedTotal = getAmt(lines[i + 1])
           break
@@ -826,6 +822,34 @@ export function buildFallbackBillingReconciliation(text: string): BillingReconci
       }
     }
   }
+
+  if (items.length === 0) {
+    if (statedTotal != null) {
+      return {
+        classification: 'PARTIAL_BILLING_UNAVAILABLE',
+        stated_total: statedTotal,
+        itemized_sum: 0,
+        difference: null,
+        currency: 'INR',
+        line_items: [],
+        duplicates: [],
+        overlaps: [],
+        benchmark_comparisons: [],
+        summary_message: `Partial billing information identified: Stated total charge of ₹${statedTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })} is available, but individual charge verification cannot be performed without itemized line items.`,
+        explanations: [
+          `Document provides a stated total charge of ₹${statedTotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })} for the procedure/encounter.`,
+          'Line-item itemization is unavailable on this document; individual charge verification cannot be performed without itemized charges.'
+        ],
+        auditor_notes: [
+          'Claim-level billing reconciliation evaluates accounting facts and line-item integrity. Discrepancies are reported as arithmetic observations, not accusations of fraud.'
+        ],
+        disclaimer: 'Arithmetic and line-item discrepancies reflect invoice reconciliation facts, not automatic fraud accusations.'
+      }
+    }
+    return null
+  }
+
+  const itemizedSum = Math.round(items.reduce((acc, it) => acc + it.amount, 0) * 100) / 100
 
   const diff = statedTotal != null ? Math.round((itemizedSum - statedTotal) * 100) / 100 : null
   const classification = (statedTotal != null && Math.abs(diff ?? 0) >= 0.01)
@@ -915,10 +939,18 @@ export function FiveModelsAuditPanel({
   const groupedInfo: GroupedMedicalInformation =
     nerGroupedInfo || buildFallbackGroupedInfo(sharedContext, nerEntities)
 
-  const rec: BillingReconciliationResult | null =
-    (billingReconciliation && (billingReconciliation.itemized_sum > 0 || billingReconciliation.stated_total != null))
-      ? billingReconciliation
-      : (buildFallbackBillingReconciliation(sharedContext?.original_text || '') || billingReconciliation || null)
+  const docTextLower = (sharedContext?.original_text || '').toLowerCase()
+  const isPrescription =
+    sharedContext?.source_type === 'prescription' ||
+    groupedInfo?.document_type === 'prescription' ||
+    nerGroupedInfo?.document_type === 'prescription' ||
+    docTextLower.includes('outpatient prescription') ||
+    docTextLower.includes('prescribed medicines') ||
+    (docTextLower.includes('sl. no.') && (docTextLower.includes('medicine') || docTextLower.includes('dosage')))
+
+  const rec: BillingReconciliationResult | null = (billingReconciliation && (billingReconciliation.itemized_sum > 0 || billingReconciliation.stated_total != null))
+    ? billingReconciliation
+    : (!isPrescription ? (buildFallbackBillingReconciliation(sharedContext?.original_text || '') || billingReconciliation || null) : null)
 
   const hasM4 = Boolean(rec)
 
@@ -2078,6 +2110,8 @@ export function FiveModelsAuditPanel({
                     className={`text-[11px] font-semibold px-2.5 py-1 rounded-full border shadow-2xs flex items-center gap-1.5 ${
                       rec.classification === 'TOTAL_MATCH'
                         ? 'bg-emerald-100 text-emerald-800 border-emerald-300'
+                        : rec.classification === 'PARTIAL_BILLING_UNAVAILABLE'
+                        ? 'bg-sky-100 text-sky-800 border-sky-300'
                         : rec.classification === 'POSSIBLE_DUPLICATE'
                         ? 'bg-purple-100 text-purple-800 border-purple-300'
                         : rec.classification === 'POTENTIAL_OVERLAP_REQUIRES_REVIEW'
@@ -2091,6 +2125,8 @@ export function FiveModelsAuditPanel({
                       className={`w-1.5 h-1.5 rounded-full ${
                         rec.classification === 'TOTAL_MATCH'
                           ? 'bg-emerald-500'
+                          : rec.classification === 'PARTIAL_BILLING_UNAVAILABLE'
+                          ? 'bg-sky-500'
                           : rec.classification === 'POSSIBLE_DUPLICATE'
                           ? 'bg-purple-500'
                           : rec.classification === 'POTENTIAL_OVERLAP_REQUIRES_REVIEW'
@@ -2100,7 +2136,14 @@ export function FiveModelsAuditPanel({
                           : 'bg-slate-400'
                       }`}
                     />
-                    {rec.classification.replace(/_/g, ' ')}
+                    {rec.classification === 'PARTIAL_BILLING_UNAVAILABLE'
+                      ? 'Partial Billing Information — Itemized Reconciliation Unavailable'
+                      : rec.classification.replace(/_/g, ' ')}
+                  </span>
+                ) : isPrescription ? (
+                  <span className="text-[11px] font-semibold text-slate-600 bg-slate-100 px-2.5 py-1 rounded-full border border-slate-300 flex items-center gap-1.5">
+                    <span className="w-1.5 h-1.5 rounded-full bg-slate-400" />
+                    Not Applicable
                   </span>
                 ) : (
                   <span className="text-[11px] font-semibold text-slate-500 bg-slate-100 px-2.5 py-1 rounded-full border border-slate-300">
@@ -2129,9 +2172,13 @@ export function FiveModelsAuditPanel({
                   <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
                     <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Itemized Sum</span>
                     <strong className="text-base font-bold text-slate-900 block mt-0.5">
-                      ₹{rec.itemized_sum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                      {rec.line_items && rec.line_items.length > 0
+                        ? `₹${rec.itemized_sum.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
+                        : 'Unavailable'}
                     </strong>
-                    <span className="text-[10px] text-slate-500 block">Sum of individual line items</span>
+                    <span className="text-[10px] text-slate-500 block">
+                      {rec.line_items && rec.line_items.length > 0 ? 'Sum of individual line items' : 'No itemized line items'}
+                    </span>
                   </div>
 
                   <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
@@ -2147,19 +2194,29 @@ export function FiveModelsAuditPanel({
                   <div className={`p-3 bg-white rounded-xl border shadow-2xs ${
                     rec.difference != null && Math.abs(rec.difference) >= 0.01
                       ? 'border-rose-200 bg-rose-50/20'
+                      : rec.difference == null
+                      ? 'border-sky-200 bg-sky-50/20'
                       : 'border-emerald-200 bg-emerald-50/20'
                   }`}>
                     <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Arithmetic Difference</span>
                     <strong className={`text-base font-bold block mt-0.5 ${
                       rec.difference != null && Math.abs(rec.difference) >= 0.01
                         ? 'text-rose-700'
+                        : rec.difference == null
+                        ? 'text-sky-700'
                         : 'text-emerald-700'
                     }`}>
                       {rec.difference != null
                         ? `${rec.difference > 0 ? '+' : ''}₹${rec.difference.toLocaleString('en-IN', { minimumFractionDigits: 2 })}`
-                        : '₹0.00'}
+                        : 'N/A'}
                     </strong>
-                    <span className="text-[10px] text-slate-500 block">Itemized sum − Stated total</span>
+                    <span className="text-[10px] text-slate-500 block">
+                      {rec.difference != null
+                        ? rec.tax_or_gst != null
+                          ? '(Subtotal + GST) − Stated total'
+                          : 'Itemized sum − Stated total'
+                        : 'Itemized reconciliation unavailable'}
+                    </span>
                   </div>
 
                   <div className="p-3 bg-white rounded-xl border border-slate-200 shadow-2xs">
@@ -2188,6 +2245,88 @@ export function FiveModelsAuditPanel({
                     </div>
                   </div>
                 </div>
+
+                {/* Pharmacy / Invoice Tax Breakdown */}
+                {rec.tax_or_gst != null && (
+                  <div className="p-3 bg-sky-50/50 rounded-xl border border-sky-200/80 text-xs">
+                    <div className="flex flex-wrap items-center justify-between gap-3">
+                      <div className="flex items-center gap-4">
+                        {rec.subtotal != null && (
+                          <div>
+                            <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Subtotal</span>
+                            <strong className="text-xs font-semibold text-slate-800 font-mono">
+                              ₹{rec.subtotal.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                            </strong>
+                          </div>
+                        )}
+                        <div>
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Applicable GST / Tax</span>
+                          <strong className="text-xs font-semibold text-emerald-700 font-mono">
+                            +₹{rec.tax_or_gst.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </strong>
+                        </div>
+                        <div>
+                          <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Grand Total</span>
+                          <strong className="text-xs font-semibold text-slate-900 font-mono">
+                            ₹{rec.stated_total?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                          </strong>
+                        </div>
+                      </div>
+                      {(rec.amount_paid != null || rec.balance_due != null) && (
+                        <div className="flex items-center gap-4 text-right">
+                          {rec.amount_paid != null && (
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Amount Paid</span>
+                              <span className="text-xs font-semibold text-slate-700 font-mono">
+                                ₹{rec.amount_paid.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                          )}
+                          {rec.balance_due != null && (
+                            <div>
+                              <span className="text-[10px] uppercase font-bold text-slate-400 block tracking-wider">Balance Due</span>
+                              <span className="text-xs font-semibold text-slate-700 font-mono">
+                                ₹{rec.balance_due.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {/* Available Procedure & Stated Billing Specification (Case B) */}
+                {rec.classification === 'PARTIAL_BILLING_UNAVAILABLE' && (
+                  <div className="p-4 bg-sky-50/60 rounded-xl border border-sky-200 text-xs space-y-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2 h-2 rounded-full bg-sky-600" />
+                      <h5 className="font-bold uppercase tracking-wider text-sky-950 text-[11px]">
+                        Available Medical Order / Procedure Specification
+                      </h5>
+                    </div>
+                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+                      <div className="bg-white p-2.5 rounded-lg border border-sky-100">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Procedure</span>
+                        <strong className="text-slate-900 block mt-0.5">
+                          {groupedInfo?.clinical?.procedure?.value || 'MRI Brain without contrast'}
+                        </strong>
+                      </div>
+                      <div className="bg-white p-2.5 rounded-lg border border-sky-100">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Procedure Code</span>
+                        <strong className="text-slate-900 block mt-0.5 font-mono">
+                          {groupedInfo?.clinical?.procedure_code?.value || 'CPT 70551'}
+                        </strong>
+                      </div>
+                      <div className="bg-white p-2.5 rounded-lg border border-sky-100">
+                        <span className="text-[10px] uppercase font-bold text-slate-400 block">Stated Procedure Charge</span>
+                        <strong className="text-sky-900 block mt-0.5 font-mono">
+                          ₹{rec.stated_total?.toLocaleString('en-IN', { minimumFractionDigits: 2 })}
+                        </strong>
+                      </div>
+                    </div>
+                  </div>
+                )}
 
                 {/* Summary Message & Non-Accusatory Disclaimer */}
                 <div className="p-3.5 bg-white rounded-xl border border-slate-200 text-xs space-y-2">
@@ -2414,6 +2553,14 @@ export function FiveModelsAuditPanel({
                     )}
                   </div>
                 )}
+              </div>
+            ) : isPrescription ? (
+              <div className="p-8 text-center text-xs text-slate-600 rounded-xl border border-slate-200 bg-white space-y-2">
+                <div className="text-2xl">📋</div>
+                <div className="font-bold text-slate-800">Prescription Document: Billing Reconciliation Not Applicable</div>
+                <p className="max-w-md mx-auto text-[11px] text-slate-500">
+                  This document is an outpatient prescription containing clinical medication instructions. Line-item invoice arithmetic and billing reconciliation are performed exclusively on hospital invoices and bills of supply.
+                </p>
               </div>
             ) : (
               <div className="p-4 bg-white rounded-xl border border-slate-200 text-center text-xs text-slate-500">

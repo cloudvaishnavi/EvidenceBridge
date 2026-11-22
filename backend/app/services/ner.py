@@ -7,7 +7,7 @@ from prescriptions, discharge summaries, and medical invoices.
 from pathlib import Path
 import re
 import time
-from typing import Any, Optional
+from typing import Any, Optional, Union
 import torch
 from transformers import AutoModelForTokenClassification, AutoTokenizer
 
@@ -451,7 +451,7 @@ class BioBERTNERService:
 
         return cleaned
 
-    def group_medical_information(self, text: str, entities: list[ExtractedEntity]) -> GroupedMedicalInformation:
+    def group_medical_information(self, text: str, entities: Union[list[ExtractedEntity], Any]) -> GroupedMedicalInformation:
         """
         Organize extracted entities into clean, logically grouped medical domains
         adapting dynamically to the detected document type (Invoice, Prescription, Discharge, Insurance):
@@ -460,6 +460,9 @@ class BioBERTNERService:
         3. Clinical Information (Encounter type, Procedure, Diagnosis, Indication, Admission/Discharge dates, Room type)
         4. Billing Information (Billed amount, Currency, Unit price, Line items, Taxes, Discounts, Deductions, Patient payable)
         """
+        if hasattr(entities, "entities"):
+            entities = getattr(entities, "entities")
+
         INDIAN_LOCATIONS = {
             "KARNATAKA", "RNATAKA", "BALLARI", "BENGALURU", "BANGALORE",
             "MAHARASHTRA", "TAMIL NADU", "DELHI", "MUMBAI", "CHENNAI",
@@ -473,6 +476,15 @@ class BioBERTNERService:
         billing_group = BillingGroup()
 
         doc_type = self._detect_document_type(entities, text)
+
+        # Detect Document Title from header line
+        doc_title: Optional[str] = None
+        lines_all = [l.strip() for l in text.splitlines() if l.strip()]
+        for l_cand in lines_all[:3]:
+            if re.search(r"\b(?:CONSULTATION|ORDER|INVOICE|BILL|PRESCRIPTION|SUMMARY|REPORT|RECORD|ASSESSMENT|EVALUATION|NOTE)\b", l_cand, re.I):
+                if not re.search(r"^\s*(?:patient|hospital|facility|clinic|institute|doctor|physician|date|age|gender|procedure)\s*[:#]", l_cand, re.I):
+                    doc_title = l_cand.strip()
+                    break
 
         # 1. Hospital / Provider / Insurer Information
         header_hosp = re.search(r"\b(?:HOSPITAL|FACILITY|CLINIC|INSTITUTE)\s*[:#]\s*([A-Za-z0-9&.,\s\-]+?)(?:\n|\r|$)", text, re.IGNORECASE)
@@ -1218,14 +1230,35 @@ class BioBERTNERService:
                 return False
             return len(clean_p) >= 4
 
-        proc_header_m = re.search(r"\b(?:Surgical\s*Procedure|Clinical\s*Procedure|Procedure\s*Name|Procedure|Intervention|Surgery)\s*[:#]\s*([A-Za-z0-9\s\-]+?)(?:\n|\r|,|\||$)", text, re.I)
-        if proc_header_m and is_valid_clinical_procedure(proc_header_m.group(1)):
-            clinical_group.procedure = GroupedField(
-                value=proc_header_m.group(1).strip(),
-                confidence=0.98,
-                requires_human_review=False,
-                raw_entity="PROCEDURE"
-            )
+        proc_header_m = re.search(r"\b(?:Surgical\s*Procedure|Clinical\s*Procedure|Procedure\s*Name|Procedure|Intervention|Surgery)\s*[:#]\s*([A-Za-z0-9\s\-/().]+?)(?:\n|\r|,|\||$)", text, re.I)
+        if proc_header_m:
+            proc_val = proc_header_m.group(1).strip().rstrip(".")
+            # Check for CPT / procedure code
+            cpt_m = re.search(r"\b(CPT\s*\d{4,5}|\d{5})\b", proc_val, re.I)
+            if cpt_m:
+                clinical_group.procedure_code = GroupedField(
+                    value=cpt_m.group(0).strip(),
+                    confidence=0.98,
+                    requires_human_review=False,
+                    raw_entity="PROCEDURE_CODE"
+                )
+                if not hospital_group.claim_reference:
+                    hospital_group.claim_reference = GroupedField(
+                        value=cpt_m.group(0).strip(),
+                        confidence=0.98,
+                        requires_human_review=False,
+                        raw_entity="CLAIM_REFERENCE"
+                    )
+            clean_proc = re.sub(r"^\s*CPT\s*\d{4,5}\s*", "", proc_val, flags=re.I).strip(" .")
+            if re.search(r"Magnetic\s*Resonance\s*Imaging\s*\(MRI\)", clean_proc, re.I):
+                clean_proc = re.sub(r"Magnetic\s*Resonance\s*Imaging\s*\(MRI\)", "MRI", clean_proc, flags=re.I).strip()
+            if is_valid_clinical_procedure(clean_proc):
+                clinical_group.procedure = GroupedField(
+                    value=clean_proc,
+                    confidence=0.98,
+                    requires_human_review=False,
+                    raw_entity="PROCEDURE"
+                )
         else:
             proc_ent = next((e for e in entities if e.entity == "PROCEDURE" and is_valid_clinical_procedure(e.text)), None)
             if proc_ent:
@@ -1264,16 +1297,26 @@ class BioBERTNERService:
                     raw_entity="DIAGNOSIS"
                 )
 
-        ind_match = re.search(r"(?:for|indicated for)\s+([A-Za-z\s]+?)(?:\.|\n|$)", text, re.I)
-        if ind_match:
-            ind_text = ind_match.group(1).strip()
-            if ind_text and ind_text.lower() != (clinical_group.diagnosis.value.lower() if clinical_group.diagnosis else ""):
-                clinical_group.clinical_indication = GroupedField(
-                    value=ind_text.capitalize(),
-                    confidence=0.88,
-                    requires_human_review=False,
-                    raw_entity="INDICATION"
-                )
+        # Explicit Clinical Indication header check
+        ind_header_m = re.search(r"\b(?:Clinical\s*Indication|Indication)\s*[:#]\s*(.+?)(?:\n|\r|$)", text, re.I)
+        if ind_header_m and len(ind_header_m.group(1).strip()) >= 4:
+            clinical_group.clinical_indication = GroupedField(
+                value=ind_header_m.group(1).strip(),
+                confidence=0.98,
+                requires_human_review=False,
+                raw_entity="INDICATION"
+            )
+        else:
+            ind_match = re.search(r"(?:for|indicated for)\s+([A-Za-z\s]+?)(?:\.|\n|$)", text, re.I)
+            if ind_match:
+                ind_text = ind_match.group(1).strip()
+                if ind_text and ind_text.lower() != (clinical_group.diagnosis.value.lower() if clinical_group.diagnosis else ""):
+                    clinical_group.clinical_indication = GroupedField(
+                        value=ind_text.capitalize(),
+                        confidence=0.88,
+                        requires_human_review=False,
+                        raw_entity="INDICATION"
+                    )
 
         # Dates: Check explicit headers first
         adm_header_m = re.search(r"\b(?:Admission(?:\s*Date)?|DOA)\s*[:#]\s*([0-9A-Za-z\s\-,/]+?)(?:\n|\r|,|\||$)", text, re.I)
@@ -1477,12 +1520,15 @@ class BioBERTNERService:
             medicines=individual_medicines if individual_medicines else [medicine_group],
             clinical=clinical_group,
             billing=billing_group,
-            document_type=doc_type
+            document_type=doc_type,
+            document_title=doc_title
         )
 
-    def _detect_document_type(self, entities: list[ExtractedEntity], text: str = "") -> Optional[str]:
+    def _detect_document_type(self, entities: Union[list[ExtractedEntity], Any], text: str = "") -> Optional[str]:
         """Infer Indian healthcare document family from extracted entity types and text."""
-        types = {e.entity for e in entities}
+        if hasattr(entities, "entities"):
+            entities = getattr(entities, "entities")
+        types = {e.entity for e in entities if hasattr(e, "entity")}
         text_lower = text.lower() if text else ""
 
         # Strong prescription indicators:
@@ -1499,11 +1545,12 @@ class BioBERTNERService:
         has_meds_and_diag = ("diagnosis" in text_lower or "diagnostic" in text_lower) and any(kw in text_lower for kw in ("tablet", "syrup", "capsule", "spray", "mg", "dosage"))
         is_explicit_rx = has_rx_keywords or has_table_cols or has_meds_and_diag
 
-        # Explicit bill indicators
+        # Explicit bill indicators: genuine invoice / financial evidence
         is_explicit_bill = any(kw in text_lower for kw in (
-            "tax invoice", "bill of supply", "itemized bill", "hospital bill", "invoice total",
-            "total billed amount", "stated total billed", "patient payable", "charges (4 days)", "room charges"
-        ))
+            "tax invoice", "pharmacy invoice", "pharmacy tax invoice", "bill of supply", "itemized bill", "hospital bill", "invoice total",
+            "total billed amount", "total billed charge", "total billed charges", "stated total billed",
+            "patient payable", "charges (4 days)", "room charges", "invoice number", "invoice no", "subtotal", "balance due", "amount paid"
+        )) or bool({"INVOICE_TOTAL", "GSTIN", "HSN_SAC", "UNIT_PRICE", "LINE_AMOUNT"} & types)
 
         if is_explicit_rx and not is_explicit_bill:
             return "prescription"
@@ -1512,12 +1559,13 @@ class BioBERTNERService:
             return "insurance_claim"
         if {"ADMISSION_DATE", "DISCHARGE_DATE", "ROOM_TYPE"} & types or any(kw in text_lower for kw in ("discharge summary", "final diagnosis", "admission date", "discharge date")):
             return "discharge_summary"
-        if ({"BRAND_NAME", "GENERIC_NAME", "DOSAGE"} & types and not ({"INVOICE_NUMBER", "GSTIN", "INVOICE_TOTAL"} & types)) or any(kw in text_lower for kw in ("prescription", "rx", "dosage instructions", "consultation date")):
+        if not is_explicit_bill and (
+            ({"BRAND_NAME", "GENERIC_NAME", "DOSAGE"} & types and not ({"INVOICE_NUMBER", "GSTIN", "INVOICE_TOTAL"} & types))
+            or any(kw in text_lower for kw in ("prescription", "rx", "dosage instructions", "consultation date"))
+        ):
             return "prescription"
         # Only classify as hospital_bill if true billing markers are present; never solely due to a date or isolated number
-        if ({"INVOICE_TOTAL", "GSTIN", "HSN_SAC", "UNIT_PRICE", "LINE_AMOUNT"} & types) or is_explicit_bill:
-            return "hospital_bill"
-        if "INVOICE_NUMBER" in types and is_explicit_bill:
+        if is_explicit_bill or ({"INVOICE_TOTAL", "GSTIN", "HSN_SAC", "UNIT_PRICE", "LINE_AMOUNT", "INVOICE_NUMBER"} & types):
             return "hospital_bill"
         return "clinical_document"
 

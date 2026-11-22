@@ -86,15 +86,20 @@ class BillingReconciliationService:
         EXCLUDE_PATTERNS = [
             r"^\s*(?:hospital|facility|clinic|institute|provider|doctor|physician|dr\.)\s*[:#]",
             r"^\s*(?:patient|name|age|gender|sex|dob|mrn|uhid|ip\s*no|op\s*no|patient\s*id)\s*[:#]",
-            r"^\s*(?:admission|discharge|doa|dod|date\s*of|encounter|length\s*of\s*stay|stay)\s*[:#]",
-            r"^\s*(?:diagnosis|indication|clinical|chief\s*complaint|treatment|procedure\s*name)\s*[:#]",
+            r"^\s*(?:admission|discharge|doa|dod|date(?:\s*of)?|invoice\s*date|dispense\s*date|encounter|length\s*of\s*stay|stay)\s*[:#]",
+            r"^\s*(?:diagnosis|indication|clinical(?:\s*indication)?|chief\s*complaint|treatment|procedure(?:\s*name)?|cpt(?:\s*code)?)\s*[:#]",
             r"^\s*(?:policy|claim\s*id|claim\s*number|tpa|insurer|preauth)\s*[:#]",
+            r"^\s*(?:invoice\s*(?:no\.?|number|#))\s*[:=]?",
             r"^\s*(?:(?:six|\d+|all)?\s*line\s*items?|billing\s*breakdown|bill\s*breakdown|charges|particulars|itemized\s*charges)\s*[:#]?\s*$",
             r"^\s*(?:itemized\s*(?:total|sum|charges?)|total\b[^\n:=]*|stated\s*(?:total|billed|bill)?\b[^\n:=]*|invoice\s*total|net\s*(?:total|payable|amount)|final\s*(?:bill|amount)|grand\s*total|subtotal|balance|amount\s*paid|patient\s*payable|amount\s*payable)\s*[:=]?",
+            r"^\s*(?:total\s*(?:gst|tax)|gst\b|tax\b|cgst\b|sgst\b|igst\b|vat\b)\s*(?:\([^)]+\))?\s*[:=]?",
+            r"^\s*(?:sub\s*total|subtotal|itemized\s*subtotal)\s*[:=]?",
+            r"^\s*(?:amount\s*paid|paid\s*amount|advance\s*paid|balance\s*due|balance\s*amount|amount\s*due)\s*[:=]?",
             r"^\s*(?:[A-Za-z\s,.-]+\b)?(?:davangere|bengaluru|bangalore|mumbai|delhi|chennai|hyderabad|kolkata|ballari|mangaluru|mysuru|karnataka|maharashtra|tamil\s*nadu|india)\b.*(?:\b\d{6}\b)?",
             r"^\s*(?:pin|pincode|postal\s*code|zip|zipcode)\s*[:#–\-]?\s*\d{5,6}\b",
             r"^\s*(?:sl\s*no|s\.no|si\.?\s*no|item\s*no|description|particulars|rate|qty|quantity|amount)\s*\|",
-            r"^\s*(?:sl\.?\s*no\.?|s\.no\.?|si\.?\s*no\.?|medicine|drug|dosage|frequency|duration|instructions?|advice|notes?)\s*$",
+            r"^\s*(?:sl\.?\s*no\.?|s\.no\.?|si\.?\s*no\.?|item\.?\s*no\.?|serial\.?\s*no\.?|medicine|drug|dosage|frequency|duration|instructions?|advice|notes?)\s*$",
+            r"^\s*(?:sl\.?\s*no\.?|s\.no\.?|si\.?\s*no\.?|item\.?\s*no\.?|serial\.?\s*no\.?)\s*[:#]\s*\d+\s*$",
             r"^[-=_\s]+$",
         ]
 
@@ -200,34 +205,90 @@ class BillingReconciliationService:
 
         return paired_items
 
-    def _is_valid_bill_item(self, desc: str, amt: float, raw_line: str) -> bool:
-        """Filter out non-monetary items like postal PIN codes, locations, phone numbers, and dates."""
+    def _is_valid_bill_item(self, desc: str, amt: float, raw_line: str, is_table_row: bool = False) -> bool:
+        """Filter out non-monetary items like serial numbers, CPT codes, quantities, postal PIN codes, locations, phone numbers, and dates."""
         if len(desc) < 3 or desc.replace(".", "").isdigit() or amt <= 0:
             return False
-        desc_low = desc.lower()
+        desc_low = desc.lower().strip()
+        has_currency_sym = bool(re.search(r"[₹$€£]|Rs\.?|INR|USD|EUR", raw_line, re.I))
+
+        # 1. Reject serial number / line index headers & labels
+        SERIAL_HEADERS = {
+            "sl no", "sl. no.", "sl.no", "sl no.", "s.no", "s.no.", "si no", "si. no.", "si.no",
+            "item no", "item no.", "serial no", "serial no.", "serial", "no", "no.", "row", "item"
+        }
+        if desc_low in SERIAL_HEADERS or re.fullmatch(r"^(?:sl\.?\s*no\.?|s\.?\s*no\.?|item\.?\s*no\.?|serial\.?\s*no\.?|no\.?)$", desc_low, re.I):
+            return False
+
+        # 2. Reject quantity / dosage / frequency / duration column headers
+        QTY_HEADERS = {
+            "qty", "quantity", "count", "units", "unit", "duration", "days", "period",
+            "frequency", "dosage", "dose", "tablet", "tablets", "capsule", "capsules", "spray", "sprays"
+        }
+        if desc_low in QTY_HEADERS or re.fullmatch(r"^(?:qty|quantity|count|duration|days?|frequency|dosage)$", desc_low, re.I):
+            return False
+
+        # 3. Reject procedure codes / CPT codes / HCPCS codes as monetary amounts
+        if re.search(r"\b(?:cpt|hcpcs|procedure\s*code|billing\s*code)\b", desc_low, re.I):
+            return False
+        # If line contains "CPT 70551", 70551 is a CPT code, never a monetary amount
+        cpt_match = re.search(r"\bCPT\s*(\d{4,5})\b", raw_line, re.I)
+        if cpt_match and amt == float(cpt_match.group(1)):
+            return False
+        # Any 5-digit number without a currency symbol in a procedure/order context is a CPT/procedure code
+        if not has_currency_sym and 10000 <= amt <= 99999 and re.search(r"\b(?:cpt|hcpcs|procedure|order|scan|imaging|mri|ct|x-ray)\b", raw_line, re.I):
+            return False
+
+        # 4. Reject geographic locations & postal PIN codes
         geo_terms = {"davangere", "karnataka", "bengaluru", "bangalore", "mumbai", "delhi", "chennai", "hyderabad", "kolkata", "ballari", "mangaluru", "mysuru", "india", "pincode", "postal"}
         if any(geo in desc_low for geo in geo_terms) and bool(re.search(r"\b\d{5,6}\b", raw_line)):
             return False
-        if not re.search(r"[₹$€£]|Rs\.?|INR|USD|EUR", raw_line, re.I):
+        if not has_currency_sym:
             if 100000 <= amt <= 999999:  # 6-digit postal PIN code
                 return False
-        months = ("january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december")
-        if any(m in desc_low for m in months):
+
+        # 5. Reject dates and months
+        months = (
+            "january", "february", "march", "april", "may", "june", "july", "august", "september", "october", "november", "december",
+            "jan", "feb", "mar", "apr", "jun", "jul", "aug", "sep", "oct", "nov", "dec"
+        )
+        if any(re.search(r"\b" + re.escape(m) + r"\b", desc_low) for m in months) or any(re.search(r"\b" + re.escape(m) + r"\b", raw_line.lower()) for m in months):
+            if not has_currency_sym:
+                return False
+        if re.search(r"^\s*(?:date|invoice\s*date|dob|doa|dod)\s*[:#]", raw_line, re.I):
+            return False
+        if 1950 <= amt <= 2099 and not has_currency_sym and not is_table_row:
             return False
 
-        # Filter out clinical dosing instructions from being parsed as billing line items
+        # 6. Filter out clinical dosing instructions
         CLINICAL_INSTRUCTION_WORDS = {
             "tablet", "tablets", "tab", "tabs", "capsule", "capsules", "cap", "caps",
             "twice daily", "once daily", "thrice daily", "daily", "after meals",
             "before breakfast", "at night", "morning and night", "od", "bd", "tds", "qid", "qhs",
-            "for 30 days", "30 days", "days", "weeks", "months", "oral", "po"
+            "for 30 days", "30 days", "days", "weeks", "months", "oral", "po", "spray", "sprays"
         }
-        has_currency_sym = bool(re.search(r"[₹$€£]|Rs\.?|INR|USD|EUR", raw_line, re.I))
-        if any(re.search(r"\b" + re.escape(w) + r"\b", desc_low) for w in CLINICAL_INSTRUCTION_WORDS) and not has_currency_sym:
-            return False
-        # Do not accept small bare single digits (1, 2, 3, 5, 10, 30) without currency symbol as monetary amounts
-        if not has_currency_sym and amt in (1.0, 2.0, 3.0, 4.0, 5.0, 10.0, 15.0, 20.0, 30.0, 50.0):
-            return False
+        if any(re.search(r"\b" + re.escape(w) + r"\b", desc_low) for w in CLINICAL_INSTRUCTION_WORDS) and not has_currency_sym and not is_table_row:
+            KNOWN_MEDS = ("paracetamol", "amoxicillin", "cetirizine", "pantoprazole", "azithromycin", "ciprofloxacin", "metformin", "atorvastatin", "syrup", "infusion", "injection", "saline")
+            if not any(med in desc_low for med in KNOWN_MEDS):
+                return False
+
+        # 7. Serial numbers & bare counts:
+        # Serial numbers (1, 2) and quantities must NEVER be treated as monetary amounts
+        if amt in (1.0, 2.0):
+            if not has_currency_sym or desc_low in SERIAL_HEADERS or any(w in desc_low for w in CLINICAL_INSTRUCTION_WORDS):
+                return False
+
+        # Non-table lines without currency symbol reject amounts < 50.0 to prevent list numbers, days, counts from being parsed as prices
+        if not has_currency_sym and not is_table_row:
+            if amt < 50.0:
+                return False
+        elif not has_currency_sym and is_table_row:
+            # In validated table rows, allow monetary amounts >= 5.0 (e.g. ₹30, ₹40, ₹75)
+            # but strictly reject integers <= 2.0 (serial numbers / small quantities)
+            if amt <= 2.0:
+                return False
+            if amt < 5.0 and ("." not in str(amt) or amt.is_integer()):
+                return False
 
         return True
 
@@ -240,12 +301,18 @@ class BillingReconciliationService:
                 # Find amount part (typically last column or second column with digits)
                 for part in reversed(parts):
                     clean_amt_str = re.sub(r"[\s/=\-onlycrdr]+$", "", part, flags=re.I)
-                    clean_amt_str = re.sub(r"[₹$€£Rs.INR,\s]", "", clean_amt_str)
+                    clean_amt_str = re.sub(r"(?i)\b(?:rs\.?|inr)\b|[₹$€£,\s]", "", clean_amt_str).strip()
                     if clean_amt_str and clean_amt_str.replace(".", "", 1).isdigit():
                         try:
                             amt = float(clean_amt_str)
-                            desc = parts[0]
-                            if self._is_valid_bill_item(desc, amt, line):
+                            # Identify description: find the first part that is not pure numeric/serial
+                            desc_candidates = [
+                                p for p in parts
+                                if not p.replace(".", "").strip().isdigit()
+                                and p.lower().strip() not in {"sl no", "sl. no.", "sl.no", "s.no", "si no", "si. no.", "item", "row", "no", "no."}
+                            ]
+                            desc = desc_candidates[0] if desc_candidates else parts[0]
+                            if self._is_valid_bill_item(desc, amt, line, is_table_row=True):
                                 return BillingLineItem(
                                     item_id=f"item_{index:03d}",
                                     description=desc,
@@ -267,7 +334,7 @@ class BillingReconciliationService:
             amt_str = m_colon.group(2).replace(",", "").strip()
             try:
                 amt = float(amt_str)
-                if self._is_valid_bill_item(desc, amt, line):
+                if self._is_valid_bill_item(desc, amt, line, is_table_row=("." in amt_str)):
                     return BillingLineItem(
                         item_id=f"item_{index:03d}",
                         description=desc,
@@ -289,7 +356,7 @@ class BillingReconciliationService:
             amt_str = m_curr.group(2).replace(",", "").strip()
             try:
                 amt = float(amt_str)
-                if self._is_valid_bill_item(desc, amt, line):
+                if self._is_valid_bill_item(desc, amt, line, is_table_row=True):
                     return BillingLineItem(
                         item_id=f"item_{index:03d}",
                         description=desc,
@@ -311,7 +378,7 @@ class BillingReconciliationService:
             amt_str = m_dash.group(2).replace(",", "").strip()
             try:
                 amt = float(amt_str)
-                if self._is_valid_bill_item(desc, amt, line):
+                if self._is_valid_bill_item(desc, amt, line, is_table_row=("." in amt_str)):
                     return BillingLineItem(
                         item_id=f"item_{index:03d}",
                         description=desc,
@@ -333,7 +400,7 @@ class BillingReconciliationService:
             amt_str = m_space.group(2).replace(",", "").strip()
             try:
                 amt = float(amt_str)
-                if self._is_valid_bill_item(desc, amt, line):
+                if self._is_valid_bill_item(desc, amt, line, is_table_row=True):
                     return BillingLineItem(
                         item_id=f"item_{index:03d}",
                         description=desc,
@@ -373,18 +440,24 @@ class BillingReconciliationService:
         if not text:
             return None
 
+        # Known CPT codes in text to explicitly reject from being extracted as monetary totals
+        cpt_codes = set(re.findall(r"\bCPT\s*(\d{4,5})\b", text, re.I))
+
         # 1. Regex pattern for stated total in text with strict precedence order (supporting trailing /- or only):
         patterns = [
-            r"(?:stated\s*(?:total|billed|bill)?\s*(?:amount|charges?)?|total\s*billed\s*amount|grand\s*total|patient\s*payable|final\s*bill\s*amount)\s*[:=]?\s*(?:Rs\.?|INR|[₹$])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?",
-            r"(?:invoice\s*total|net\s*(?:total|payable|amount)|total\s*(?:bill|amount|charge|billed|payable))\s*[:=]?\s*(?:Rs\.?|INR|[₹$])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?",
-            r"^\s*(?:total|billed\s*amount)\s*[:=]\s*(?:Rs\.?|INR|[₹$])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?",
-            r"\b(?:total|billed\s*amount)\s*[:=]?\s*(?:Rs\.?|INR|[₹$])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?",
+            r"(?:stated\s*(?:total|billed|bill)?\s*(?:amount|charges?|fee)?|total\s*billed\s*(?:amount|charges?|fee)?|grand\s*total|patient\s*payable|final\s*bill\s*(?:amount)?)\s*[:=]?\s*(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?",
+            r"(?:invoice\s*total|net\s*(?:total|payable|amount)|total\s*(?:bill|amount|charge|charges|billed|payable|fee|cost)|billed\s*(?:amount|charge|charges|fee)|procedure\s*charge)\s*[:=]?\s*(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?",
+            r"^\s*(?:total|billed\s*(?:amount|charges?|fee)?)\s*[:=]\s*(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?",
+            r"\b(?:total|billed\s*(?:amount|charges?|fee)?)\s*[:=]?\s*(?:Rs\.?|INR|[₹$€£])\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?",
         ]
         for pat in patterns:
             m = re.search(pat, text, re.IGNORECASE)
             if m:
                 try:
                     val = float(m.group(1).replace(",", "").strip())
+                    # Ensure CPT codes (e.g. 70551) are never treated as total billed amounts
+                    if str(int(val)) in cpt_codes and val > 1000:
+                        continue
                     if val > 0:
                         return val
                 except ValueError:
@@ -393,11 +466,13 @@ class BillingReconciliationService:
         # 2. Multi-line total match: Header on line i, amount on line i+1
         lines = [l.strip() for l in text.splitlines() if l.strip()]
         for i in range(len(lines) - 1):
-            if re.search(r"^(?:stated\s*(?:total|billed|bill)?\s*(?:amount|charges?)?|total\s*billed\s*amount|grand\s*total|final\s*bill|patient\s*payable)\s*[:=]?$", lines[i], re.I):
-                amt_m = re.search(r"^(?:Rs\.?|INR|[₹$])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?$", lines[i + 1], re.I)
+            if re.search(r"^(?:stated\s*(?:total|billed|bill)?\s*(?:amount|charges?)?|total\s*billed\s*(?:amount|charges?|fee)?|total\s*(?:charge|charges|amount|bill)|grand\s*total|final\s*bill|patient\s*payable)\s*[:=]?$", lines[i], re.I):
+                amt_m = re.search(r"^(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]+)?)(?:\s*(?:/[-=]|only))?$", lines[i + 1], re.I)
                 if amt_m:
                     try:
                         val = float(amt_m.group(1).replace(",", "").strip())
+                        if str(int(val)) in cpt_codes and val > 1000:
+                            continue
                         if val > 0:
                             return val
                     except ValueError:
@@ -414,6 +489,84 @@ class BillingReconciliationService:
                     except ValueError:
                         pass
 
+        return None
+
+    def extract_subtotal(self, text: str) -> Optional[float]:
+        """Extract subtotal from text."""
+        if not text:
+            return None
+        m = re.search(
+            r"\b(?:sub\s*total|subtotal|itemized\s*subtotal)\s*[:=]?\s*(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]{1,2})?)(?:\s*(?:/[-=]|only))?",
+            text,
+            re.I
+        )
+        if m:
+            try:
+                return float(m.group(1).replace(",", "").strip())
+            except ValueError:
+                pass
+        return None
+
+    def extract_tax_or_gst(self, text: str) -> Optional[float]:
+        """Extract GST or tax amount from text."""
+        if not text:
+            return None
+        # 1. Total GST or combined GST / Tax with optional percentage, e.g. "GST (5%): ₹7.25", "GST: ₹7.25", "Tax: ₹7.25"
+        m_gst = re.search(
+            r"\b(?:total\s*(?:gst|tax)|gst\s*(?:\([^\)]+\))?|tax|vat)\s*[:=]?\s*(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]{1,2})?)(?:\s*(?:/[-=]|only))?",
+            text,
+            re.I
+        )
+        if m_gst:
+            try:
+                val = float(m_gst.group(1).replace(",", "").strip())
+                if val > 0:
+                    return val
+            except ValueError:
+                pass
+
+        # 2. Separate CGST + SGST
+        m_cgst = re.search(r"\bcgst\s*(?:\([^\)]+\))?\s*[:=]?\s*(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]{1,2})?)", text, re.I)
+        m_sgst = re.search(r"\bsgst\s*(?:\([^\)]+\))?\s*[:=]?\s*(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]{1,2})?)", text, re.I)
+        if m_cgst and m_sgst:
+            try:
+                c_val = float(m_cgst.group(1).replace(",", "").strip())
+                s_val = float(m_sgst.group(1).replace(",", "").strip())
+                return round(c_val + s_val, 2)
+            except ValueError:
+                pass
+        return None
+
+    def extract_amount_paid(self, text: str) -> Optional[float]:
+        """Extract amount paid from text."""
+        if not text:
+            return None
+        m = re.search(
+            r"\b(?:amount\s*paid|paid\s*amount|advance\s*paid)\s*[:=]?\s*(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]{1,2})?)(?:\s*(?:/[-=]|only))?",
+            text,
+            re.I
+        )
+        if m:
+            try:
+                return float(m.group(1).replace(",", "").strip())
+            except ValueError:
+                pass
+        return None
+
+    def extract_balance_due(self, text: str) -> Optional[float]:
+        """Extract balance due from text."""
+        if not text:
+            return None
+        m = re.search(
+            r"\b(?:balance\s*due|balance\s*amount|amount\s*due)\s*[:=]?\s*(?:Rs\.?|INR|[₹$€£])?\s*([0-9,]+(?:\.[0-9]{1,2})?)(?:\s*(?:/[-=]|only))?",
+            text,
+            re.I
+        )
+        if m:
+            try:
+                return float(m.group(1).replace(",", "").strip())
+            except ValueError:
+                pass
         return None
 
     def detect_duplicate_line_items(self, line_items: list[BillingLineItem]) -> list[DuplicateLineItem]:
@@ -571,31 +724,119 @@ class BillingReconciliationService:
 
         return overlaps
 
-    def match_benchmarks(self, line_items: list[BillingLineItem]) -> list[BenchmarkComparison]:
+    def match_benchmarks(
+        self,
+        line_items: list[BillingLineItem],
+        text: Optional[str] = None,
+        stated_total: Optional[float] = None
+    ) -> list[BenchmarkComparison]:
         """
-        Compare line items against verified benchmarks in price_benchmarks.json.
+        Compare line items (or document procedure stated charge) against verified benchmarks in price_benchmarks.json.
         Records source, ceiling, and conditions.
         Explicitly reports 'Comparison cannot be established' when unlisted without inventing tariffs.
         """
         benchmarks = self._load_benchmarks()
         comparisons: list[BenchmarkComparison] = []
 
-        for item in line_items:
-            item_desc_lower = item.description.lower()
+        if line_items:
+            for item in line_items:
+                item_desc_lower = item.description.lower()
+                matched_b: Optional[dict[str, Any]] = None
+                best_match_score = 0
+
+                # Match against knowledge base keywords
+                for b in benchmarks:
+                    b_curr = b.get("currency", "INR")
+                    keywords = b.get("keywords", [])
+                    score = sum(1 for kw in keywords if kw.lower() in item_desc_lower)
+                    # Prioritize INR benchmarks for Indian bills
+                    if b_curr == "INR" and score > 0:
+                        score += 1
+                    if score > best_match_score and score >= 1:
+                        best_match_score = score
+                        matched_b = b
+
+                if matched_b is not None:
+                    b_max = float(matched_b.get("typical_max", 0.0))
+                    b_min = float(matched_b.get("typical_min", 0.0))
+                    source = str(matched_b.get("source", "Official Price Benchmark"))
+                    unit = matched_b.get("unit")
+                    cat = matched_b.get("category")
+
+                    if item.amount > b_max:
+                        diff = round(item.amount - b_max, 2)
+                        pct = round((diff / b_max) * 100, 1) if b_max > 0 else 0.0
+                        note = f"Billed charge of ₹{item.amount:,.2f} exceeds {source} benchmark ceiling of ₹{b_max:,.2f} by ₹{diff:,.2f} ({pct}%)."
+                        status = "EXCEEDS_BENCHMARK"
+                    elif item.amount < b_min:
+                        diff = round(b_min - item.amount, 2)
+                        pct = round((diff / b_min) * 100, 1) if b_min > 0 else 0.0
+                        note = f"Billed charge of ₹{item.amount:,.2f} is below typical benchmark minimum of ₹{b_min:,.2f} ({source})."
+                        status = "BELOW_BENCHMARK"
+                    else:
+                        diff = 0.0
+                        pct = 0.0
+                        note = f"Billed charge of ₹{item.amount:,.2f} is within published benchmark range (₹{b_min:,.2f} - ₹{b_max:,.2f}) from {source}."
+                        status = "WITHIN_BENCHMARK"
+
+                    comparisons.append(
+                        BenchmarkComparison(
+                            service_or_item=item.description,
+                            billed_amount=item.amount,
+                            benchmark_min=b_min,
+                            benchmark_max=b_max,
+                            currency="INR",
+                            status=status,
+                            difference_amount=diff,
+                            percentage_difference=pct,
+                            source_attribution=source,
+                            service_category=cat,
+                            ceiling_conditions=unit,
+                            note=note
+                        )
+                    )
+                else:
+                    # Comparison cannot be established — never invent tariffs
+                    comparisons.append(
+                        BenchmarkComparison(
+                            service_or_item=item.description,
+                            billed_amount=item.amount,
+                            benchmark_min=None,
+                            benchmark_max=None,
+                            currency="INR",
+                            status="CANNOT_ESTABLISH",
+                            difference_amount=None,
+                            percentage_difference=None,
+                            source_attribution=None,
+                            note=f"Comparison cannot be established — no published benchmark available for '{item.description}' in this region."
+                        )
+                    )
+        elif stated_total is not None and text:
+            # Case B: No line items, but document procedure and stated charge exist
+            text_low = text.lower()
+            cpt_codes = set(re.findall(r"\b(?:cpt\s*)?(\d{5})\b", text_low))
             matched_b: Optional[dict[str, Any]] = None
             best_match_score = 0
 
-            # Match against knowledge base keywords
+            # 1. Match by CPT code if present
             for b in benchmarks:
+                b_cpt = str(b.get("cpt_code", ""))
                 b_curr = b.get("currency", "INR")
-                keywords = b.get("keywords", [])
-                score = sum(1 for kw in keywords if kw.lower() in item_desc_lower)
-                # Prioritize INR benchmarks for Indian bills
-                if b_curr == "INR" and score > 0:
-                    score += 1
-                if score > best_match_score and score >= 1:
-                    best_match_score = score
+                if b_cpt and b_cpt in cpt_codes and b_curr == "INR":
                     matched_b = b
+                    break
+
+            # 2. Match by procedure keywords if not matched by CPT
+            if matched_b is None:
+                for b in benchmarks:
+                    b_curr = b.get("currency", "INR")
+                    keywords = b.get("keywords", [])
+                    score = sum(1 for kw in keywords if kw.lower() in text_low)
+                    if b_curr == "INR" and score > 0:
+                        score += 1
+                    if score > best_match_score and score >= 2:
+                        best_match_score = score
+                        matched_b = b
 
             if matched_b is not None:
                 b_max = float(matched_b.get("typical_max", 0.0))
@@ -603,27 +844,28 @@ class BillingReconciliationService:
                 source = str(matched_b.get("source", "Official Price Benchmark"))
                 unit = matched_b.get("unit")
                 cat = matched_b.get("category")
+                svc_name = matched_b.get("entity", "Medical Procedure")
 
-                if item.amount > b_max:
-                    diff = round(item.amount - b_max, 2)
+                if stated_total > b_max:
+                    diff = round(stated_total - b_max, 2)
                     pct = round((diff / b_max) * 100, 1) if b_max > 0 else 0.0
-                    note = f"Billed charge of ₹{item.amount:,.2f} exceeds {source} benchmark ceiling of ₹{b_max:,.2f} by ₹{diff:,.2f} ({pct}%)."
+                    note = f"Stated charge of ₹{stated_total:,.2f} exceeds {source} benchmark ceiling of ₹{b_max:,.2f} by ₹{diff:,.2f} ({pct}%)."
                     status = "EXCEEDS_BENCHMARK"
-                elif item.amount < b_min:
-                    diff = round(b_min - item.amount, 2)
+                elif stated_total < b_min:
+                    diff = round(b_min - stated_total, 2)
                     pct = round((diff / b_min) * 100, 1) if b_min > 0 else 0.0
-                    note = f"Billed charge of ₹{item.amount:,.2f} is below typical benchmark minimum of ₹{b_min:,.2f} ({source})."
+                    note = f"Stated charge of ₹{stated_total:,.2f} is below typical benchmark minimum of ₹{b_min:,.2f} ({source})."
                     status = "BELOW_BENCHMARK"
                 else:
                     diff = 0.0
                     pct = 0.0
-                    note = f"Billed charge of ₹{item.amount:,.2f} is within published benchmark range (₹{b_min:,.2f} - ₹{b_max:,.2f}) from {source}."
+                    note = f"Stated charge of ₹{stated_total:,.2f} is within published benchmark range (₹{b_min:,.2f} - ₹{b_max:,.2f}) from {source}."
                     status = "WITHIN_BENCHMARK"
 
                 comparisons.append(
                     BenchmarkComparison(
-                        service_or_item=item.description,
-                        billed_amount=item.amount,
+                        service_or_item=svc_name,
+                        billed_amount=stated_total,
                         benchmark_min=b_min,
                         benchmark_max=b_max,
                         currency="INR",
@@ -636,22 +878,6 @@ class BillingReconciliationService:
                         note=note
                     )
                 )
-            else:
-                # Comparison cannot be established — never invent tariffs
-                comparisons.append(
-                    BenchmarkComparison(
-                        service_or_item=item.description,
-                        billed_amount=item.amount,
-                        benchmark_min=None,
-                        benchmark_max=None,
-                        currency="INR",
-                        status="CANNOT_ESTABLISH",
-                        difference_amount=None,
-                        percentage_difference=None,
-                        source_attribution=None,
-                        note=f"Comparison cannot be established — no published benchmark available for '{item.description}' in this region."
-                    )
-                )
 
         return comparisons
 
@@ -661,10 +887,13 @@ class BillingReconciliationService:
             return False
         t_low = text.lower()
         bill_indicators = (
-            "tax invoice", "bill of supply", "itemized bill", "hospital bill",
+            "tax invoice", "pharmacy invoice", "pharmacy tax invoice", "bill of supply", "itemized bill", "hospital bill",
             "invoice total", "total billed amount", "stated total billed",
             "patient payable", "amount payable", "room & nursing charges",
-            "line items:", "total (itemized)", "bill no:", "invoice no:"
+            "line items:", "total (itemized)", "bill no:", "invoice no:", "invoice no.", "invoice number", "invoice #",
+            "total billed charge", "total billed charges", "total charge", "total charges",
+            "billed charge", "billed amount", "stated total", "total billed",
+            "procedure charge", "subtotal", "balance due", "amount paid", "total amount"
         )
         rx_indicators = (
             "outpatient prescription", "prescription", "rx only", "prescribed medicines",
@@ -674,12 +903,16 @@ class BillingReconciliationService:
         has_rx = any(k in t_low for k in rx_indicators)
         if has_rx and not has_bill:
             return False
-        return has_bill
+        if has_bill:
+            return True
+        return self.extract_stated_total(text) is not None
 
     def reconcile_claim_billing(
         self,
         claim: Optional[Any] = None,
-        text: Optional[str] = None
+        text: Optional[str] = None,
+        raw_ocr_text: Optional[str] = None,
+        extracted_total: Optional[float] = None,
     ) -> Optional[BillingReconciliationResult]:
         """
         Complete claim-level billing reconciliation:
@@ -690,18 +923,29 @@ class BillingReconciliationService:
         5. Match against grounded price benchmarks.
         6. Determine classification and non-accusatory auditor findings.
         """
-        doc_text = text or (getattr(claim, "original_text", "") if claim else "") or ""
+        doc_text = text or raw_ocr_text or (getattr(claim, "original_text", "") if claim else "") or ""
         source_type = getattr(claim, "source_type", None)
 
-        # Prescriptions never enter billing reconciliation
-        if source_type == "prescription" or (source_type != "hospital_bill" and not self.is_likely_bill(doc_text) and any(w in doc_text.lower() for w in ("prescription", "rx only", "prescribed medicines", "outpatient prescription"))):
-            logger.info("Prescription document identified: billing reconciliation is not applicable.")
+        # Prescriptions without genuine billing evidence never enter billing reconciliation
+        is_bill = self.is_likely_bill(doc_text)
+        has_rx_words = any(w in doc_text.lower() for w in ("prescription", "rx only", "prescribed medicines", "outpatient prescription"))
+        if (source_type == "prescription" or has_rx_words) and not is_bill:
+            logger.info("Prescription document without billing headers identified: billing reconciliation is not applicable.")
             return None
 
         # 1. Line items & Stated total
         line_items = self.parse_line_items(doc_text)
-        stated_total = self.extract_stated_total(doc_text, claim)
+        stated_total = extracted_total if extracted_total is not None else self.extract_stated_total(doc_text, claim)
         itemized_sum = round(sum(it.amount for it in line_items), 2)
+        subtotal = self.extract_subtotal(doc_text)
+        tax_or_gst = self.extract_tax_or_gst(doc_text)
+        amount_paid = self.extract_amount_paid(doc_text)
+        balance_due = self.extract_balance_due(doc_text)
+
+        # Case D: If neither line items nor stated total exist on a non-bill document, return None
+        if not line_items and stated_total is None:
+            if source_type != "hospital_bill" and not is_bill:
+                return None
 
         # Extract Patient Payable if present (single-line or two-line)
         pat_pay_match = re.search(
@@ -727,36 +971,53 @@ class BillingReconciliationService:
                         except ValueError:
                             pass
 
-        # 2. Arithmetic difference
+        # 2. Arithmetic difference (Subtotal + GST = Stated Grand Total)
         difference = None
-        if stated_total is not None:
-            difference = round(itemized_sum - stated_total, 2)
+        if stated_total is not None and len(line_items) > 0:
+            if tax_or_gst is not None and tax_or_gst > 0:
+                expected_total = round(itemized_sum + tax_or_gst, 2)
+                difference = round(expected_total - stated_total, 2)
+            else:
+                difference = round(itemized_sum - stated_total, 2)
 
         # 3. Duplicates & Overlaps
         duplicates = self.detect_duplicate_line_items(line_items)
         overlaps = self.detect_overlapping_charges(line_items)
 
         # 4. Benchmark Comparisons
-        benchmark_comparisons = self.match_benchmarks(line_items)
+        benchmark_comparisons = self.match_benchmarks(line_items, text=doc_text, stated_total=stated_total)
 
         # 5. Determine Classification
         explanations: list[str] = []
         auditor_notes: list[str] = []
 
         if not line_items:
-            classification = BillingClassification.INSUFFICIENT_ITEMIZATION
-            is_prescription = any(w in doc_text.lower() for w in ("prescription", "prescribed medicines", "rx", "apollo clinic", "one tablet", "take 1 tablet"))
-            if is_prescription:
-                summary = "Prescription document contains clinical dosing instructions without billed charges or invoice totals. Billing reconciliation deferred to pharmacy invoice."
-                explanations.append("Document is an outpatient clinical prescription. No hospital tariff or medication prices are billed on this document.")
-            else:
+            if stated_total is not None:
+                # Case B: Medical order or consultation with a stated total charge but no itemized table
+                classification = BillingClassification.PARTIAL_BILLING_UNAVAILABLE
+                difference = None  # Do NOT report a false arithmetic discrepancy
                 summary = (
-                    f"Single stated total bill of ₹{stated_total:,.2f} without individual line-item itemization."
-                    if stated_total is not None
-                    else "No individual line items or stated total bill identified in document text."
+                    f"Partial Billing Information — Itemized Reconciliation Unavailable: Stated total charge of ₹{stated_total:,.2f} is available, "
+                    "but individual itemized charge verification cannot be performed without itemized line items."
                 )
                 explanations.append(
-                    "Document lacks individual line items to reconcile against the stated total. "
+                    f"Document provides a stated total charge of ₹{stated_total:,.2f} for the procedure/encounter."
+                )
+                explanations.append(
+                    "Line-item itemization is unavailable on this order/consultation document; "
+                    "individual charge verification cannot be performed without itemized charges."
+                )
+                explanations.append(
+                    "No individual line-item breakdown is present. Arithmetic reconciliation is deferred without fabricating charges."
+                )
+            else:
+                is_prescription = any(w in doc_text.lower() for w in ("prescription", "prescribed medicines", "rx", "apollo clinic", "one tablet", "take 1 tablet"))
+                if is_prescription or (source_type != "hospital_bill" and not is_bill):
+                    return None
+                classification = BillingClassification.INSUFFICIENT_ITEMIZATION
+                summary = "No individual line items or stated total bill identified in document text."
+                explanations.append(
+                    "Document lacks individual line items or stated total charges to reconcile. "
                     "Line-item itemization required for accounting verification."
                 )
         elif duplicates and (stated_total is None or abs(difference or 0.0) < 0.01):
@@ -773,15 +1034,26 @@ class BillingReconciliationService:
             classification = BillingClassification.TOTAL_MISMATCH
             diff_abs = abs(difference or 0.0)
             diff_direction = "exceeds" if (difference or 0.0) > 0 else "is lower than"
-            summary = (
-                f"Unexplained difference of ₹{diff_abs:,.2f} between itemized charges (₹{itemized_sum:,.2f}) "
-                f"and stated total bill (₹{stated_total:,.2f})."
-            )
-            explanations.append(
-                f"Arithmetic discrepancy: Itemized line items sum to ₹{itemized_sum:,.2f}, which {diff_direction} "
-                f"the stated total bill of ₹{stated_total:,.2f} by ₹{diff_abs:,.2f}. "
-                "Possible reasons include unlisted services, administrative charges, arithmetic error, or unbundled fees."
-            )
+            if tax_or_gst is not None and tax_or_gst > 0:
+                expected_total = round(itemized_sum + tax_or_gst, 2)
+                summary = (
+                    f"Arithmetic Discrepancy Flagged: (Itemized charges ₹{itemized_sum:,.2f} + GST/Tax ₹{tax_or_gst:,.2f} = ₹{expected_total:,.2f}) "
+                    f"differs from stated total (₹{stated_total:,.2f}) by ₹{diff_abs:,.2f}."
+                )
+                explanations.append(
+                    f"Arithmetic discrepancy: Itemized subtotal ₹{itemized_sum:,.2f} + GST/Tax ₹{tax_or_gst:,.2f} = ₹{expected_total:,.2f}, "
+                    f"which {diff_direction} the stated total of ₹{stated_total:,.2f} by ₹{diff_abs:,.2f}."
+                )
+            else:
+                summary = (
+                    f"Unexplained difference of ₹{diff_abs:,.2f} between itemized charges (₹{itemized_sum:,.2f}) "
+                    f"and stated total bill (₹{stated_total:,.2f})."
+                )
+                explanations.append(
+                    f"Arithmetic discrepancy: Itemized line items sum to ₹{itemized_sum:,.2f}, which {diff_direction} "
+                    f"the stated total bill of ₹{stated_total:,.2f} by ₹{diff_abs:,.2f}. "
+                    "Possible reasons include unlisted services, administrative charges, arithmetic error, or unbundled fees."
+                )
             if duplicates:
                 for dup in duplicates:
                     explanations.append(f"POSSIBLE_DUPLICATE: '{dup.description}' billed {dup.occurrences} times at ₹{dup.amount_per_occurrence:,.2f} each.")
@@ -790,12 +1062,26 @@ class BillingReconciliationService:
                     explanations.append(f"POTENTIAL_OVERLAP_REQUIRES_REVIEW: {ov.explanation}")
         elif stated_total is not None and abs(difference or 0.0) < 0.01:
             classification = BillingClassification.TOTAL_MATCH
-            summary = f"Itemized charges (₹{itemized_sum:,.2f}) exactly match the stated total bill (₹{stated_total:,.2f})."
-            explanations.append("Arithmetic integrity confirmed: Sum of line items exactly equals the stated invoice total.")
+            if tax_or_gst is not None and tax_or_gst > 0:
+                summary = (
+                    f"Billing Reconciliation Complete: Itemized charges (₹{itemized_sum:,.2f}) plus "
+                    f"GST/Tax (₹{tax_or_gst:,.2f}) exactly match stated total billed amount (₹{stated_total:,.2f})."
+                )
+                explanations.append(
+                    f"Arithmetic integrity confirmed: Itemized subtotal (₹{itemized_sum:,.2f}) + GST/Tax (₹{tax_or_gst:,.2f}) = ₹{stated_total:,.2f} with zero variance."
+                )
+            else:
+                summary = f"Itemized charges (₹{itemized_sum:,.2f}) exactly match the stated total bill (₹{stated_total:,.2f})."
+                explanations.append("Arithmetic integrity confirmed: Sum of line items exactly equals the stated invoice total.")
         else:
             classification = BillingClassification.INSUFFICIENT_ITEMIZATION
             summary = f"Extracted {len(line_items)} line item(s) totalling ₹{itemized_sum:,.2f}; stated total bill not specified."
             explanations.append("Invoice provides itemized charges but lacks an explicit stated total bill header for reconciliation.")
+
+        if amount_paid is not None or balance_due is not None:
+            paid_str = f"₹{amount_paid:,.2f}" if amount_paid is not None else "N/A"
+            due_str = f"₹{balance_due:,.2f}" if balance_due is not None else "N/A"
+            explanations.append(f"Financial settlement details: Amount Paid {paid_str}, Balance Due {due_str}.")
 
         # Auditor notes
         auditor_notes.append(
@@ -814,6 +1100,10 @@ class BillingReconciliationService:
             itemized_sum=itemized_sum,
             difference=difference,
             patient_payable=patient_payable,
+            subtotal=subtotal,
+            tax_or_gst=tax_or_gst,
+            amount_paid=amount_paid,
+            balance_due=balance_due,
             currency="INR",
             line_items=line_items,
             duplicates=duplicates,

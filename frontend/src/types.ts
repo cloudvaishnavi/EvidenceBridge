@@ -568,6 +568,7 @@ export interface ClinicalGroup {
   encounter_type?: GroupedField | null
   length_of_stay?: GroupedField | null
   procedure?: GroupedField | null
+  procedure_code?: GroupedField | null
   diagnosis?: GroupedField | null
   clinical_indication?: GroupedField | null
   admission_date?: GroupedField | null
@@ -600,6 +601,7 @@ export interface GroupedMedicalInformation {
   clinical: ClinicalGroup
   billing: BillingGroup
   document_type?: string | null
+  document_title?: string | null
 }
 
 export interface NERExtractionResult {
@@ -709,6 +711,7 @@ export type BillingClassification =
   | 'POSSIBLE_DUPLICATE'
   | 'POTENTIAL_OVERLAP_REQUIRES_REVIEW'
   | 'INSUFFICIENT_ITEMIZATION'
+  | 'PARTIAL_BILLING_UNAVAILABLE'
 
 export interface BillingLineItem {
   item_id: string
@@ -759,6 +762,10 @@ export interface BillingReconciliationResult {
   stated_total?: number | null
   itemized_sum: number
   difference?: number | null
+  subtotal?: number | null
+  tax_or_gst?: number | null
+  amount_paid?: number | null
+  balance_due?: number | null
   currency?: string
   line_items: BillingLineItem[]
   duplicates: DuplicateLineItem[]
